@@ -1,0 +1,159 @@
+{
+  "cf4ea93c-53ab-4683-a86f-0e640d47f934::b84ee394-3685-456b-ad88-6a39262cf92a": {
+    "Fartygsdata_rls_test": {
+      "dax": "EVALUATE SUMMARIZECOLUMNS(\"Count\", COUNTROWS('fartyg_fartygsdata_2025'))\n---\nEVALUATE SUMMARIZECOLUMNS(\"Count\", COUNTROWS('fartyg_fartygsdata_2026'))",
+      "rls": {
+        "enabled": true,
+        "mode": "Flera användare (rotation)",
+        "users": [
+          {
+            "username": "jukka.askvinge@sl.se",
+            "roles": []
+          },
+          {
+            "username": "henrik.sabouri@sl.se",
+            "roles": []
+          },
+          {
+            "username": "Emma.Damberg@sl.se",
+            "roles": []
+          }
+        ]
+      },
+      "mode": "Flera queries (rotation)"
+    },
+    "Fartygsdata_rls_test_2": {
+      "dax": "EVALUATE SUMMARIZECOLUMNS(\"Count\", COUNTROWS('fartyg_fartygsdata_2025'))\n---\nEVALUATE SUMMARIZECOLUMNS(\"Count\", COUNTROWS('fartyg_fartygsdata_2026'))",
+      "rls": {
+        "enabled": true,
+        "mode": "Flera användare (rotation)",
+        "users": [
+          {
+            "username": "jukka.askvinge@sl.se",
+            "roles": []
+          },
+          {
+            "username": "henrik.sabouri@sl.se",
+            "roles": []
+          },
+          {
+            "username": "Emma.Damberg@sl.se",
+            "roles": []
+          },
+          {
+            "username": "jonas.nilsson@sl.se",
+            "roles": []
+          }
+        ]
+      },
+      "mode": "Flera queries (rotation)"
+    },
+    "Fartygsdata_rls_komplex_dax": {
+      "dax": "EVALUATE SUMMARIZECOLUMNS(\"Count\", COUNTROWS('fartyg_fartygsdata_2025'))\n---\nEVALUATE SUMMARIZECOLUMNS(\"Count\", COUNTROWS('fartyg_fartygsdata_2026'))\n---\nDEFINE  VAR __DS0FilterTable =     TREATAS({\"Dalarö\"}, 'Fartyg'[Fartygsnamn])     VAR __DS0FilterTable2 =     TREATAS(     {\"'Bunkringsdata'[Bunkring totalt (L) YTD]\",      \"'Fartygsdata'[Total bränsleförbrukning (L) YTD (enl bunkringsdatum)]\",      \"'Fartygsdata'[Total bränsleförbrukning (L) YTD]\"},     'Mätvärden val'[Mätvärden val  Fields]    )     VAR __DS0FilterTable3 =     TREATAS(     {\"'Bunkringsdata'[Bunkring totalt (L) MTD]\",      \"'Fartygsdata'[Total bränsleförbrukning (L) MTD (enl bunkringsdatum)]\",      \"'Fartygsdata'[Total bränsleförbrukning (L) MTD]\"},     'Mätvärden val 2'[Mätvärden val 2 Fields]    )     VAR __DS0FilterTable4 =     FILTER(     KEEPFILTERS(VALUES('Diverse'[Fartyg År])),     NOT(      'Diverse'[Fartyg År] IN {\"Skärgården 2025\",       \"Roslagen 2026\",       \"Skärgården 2026\"}     )    )     VAR __DS0FilterTable5 =     FILTER(     KEEPFILTERS(VALUES('Trafikdygn'[Trafikdygn])),     AND(      AND(       'Trafikdygn'[Trafikdygn] >= DATE(2020, 1, 1),       'Trafikdygn'[Trafikdygn] >= DATE(2016, 5, 9)      ),      'Trafikdygn'[Trafikdygn] < DATE(2026, 5, 9)     )    )     VAR __DM3FilterTable =     TREATAS({2026,     2025}, 'Trafikdygn'[År])     VAR __DS0Core =     SUMMARIZECOLUMNS(     ROLLUPADDISSUBTOTAL(      'Trafikdygn'[År], \"IsGrandTotalRowTotal\",      ROLLUPGROUP('Trafikdygn'[Månad (namn)], 'Trafikdygn'[Månad]),      \"IsDM1Total\",      NONVISUAL(__DM3FilterTable)     ),     __DS0FilterTable,     __DS0FilterTable2,     __DS0FilterTable3,     __DS0FilterTable4,     __DS0FilterTable5    )     VAR __DS0PrimaryWindowed =     TOPN(     502,     __DS0Core,     [IsGrandTotalRowTotal],     0,     'Trafikdygn'[År],     0,     [IsDM1Total],     0,     'Trafikdygn'[Månad],     1,     'Trafikdygn'[Månad (namn)],     1    )    EVALUATE   __DS0PrimaryWindowed    ORDER BY   [IsGrandTotalRowTotal] DESC,   'Trafikdygn'[År] DESC,   [IsDM1Total] DESC,   'Trafikdygn'[Månad],   'Trafikdygn'[Månad (namn)]  ",
+      "rls": {
+        "enabled": true,
+        "mode": "Flera användare (rotation)",
+        "users": [
+          {
+            "username": "jukka.askvinge@sl.se",
+            "roles": []
+          },
+          {
+            "username": "henrik.sabouri@sl.se",
+            "roles": []
+          },
+          {
+            "username": "Emma.Damberg@sl.se",
+            "roles": []
+          }
+        ]
+      },
+      "mode": "Flera queries (rotation)"
+    },
+    "Fartygsdata_rls_complex_parametrar": {
+      "dax": "DEFINE  VAR __DS0FilterTable =     TREATAS({\"{{fartyg}}\"}, 'Fartyg'[Fartygsnamn])     VAR __DS0FilterTable2 =     TREATAS(     {\"'Bunkringsdata'[Bunkring totalt (L) YTD]\",      \"'Fartygsdata'[Total bränsleförbrukning (L) YTD (enl bunkringsdatum)]\",      \"'Fartygsdata'[Total bränsleförbrukning (L) YTD]\"},     'Mätvärden val'[Mätvärden val  Fields]    )     VAR __DS0FilterTable3 =     TREATAS(     {\"'Bunkringsdata'[Bunkring totalt (L) MTD]\",      \"'Fartygsdata'[Total bränsleförbrukning (L) MTD (enl bunkringsdatum)]\",      \"'Fartygsdata'[Total bränsleförbrukning (L) MTD]\"},     'Mätvärden val 2'[Mätvärden val 2 Fields]    )     VAR __DS0FilterTable4 =     FILTER(     KEEPFILTERS(VALUES('Diverse'[Fartyg År])),     NOT(      'Diverse'[Fartyg År] IN {\"{{fartyg}} {{år}}\",       \"{{fartyg_2}} {{år_2}}\",       \"{{fartyg}} {{år_2}}\"}     )    )     VAR __DS0FilterTable5 =     FILTER(     KEEPFILTERS(VALUES('Trafikdygn'[Trafikdygn])),     AND(      AND(       'Trafikdygn'[Trafikdygn] >= DATE(2020, 1, 1),       'Trafikdygn'[Trafikdygn] >= DATE({{år}}, 5, 9)      ),      'Trafikdygn'[Trafikdygn] < DATE({{år}}, 5, 9)     )    )     VAR __DM3FilterTable =     TREATAS({{{år}}}, 'Trafikdygn'[År])     VAR __DS0Core =     SUMMARIZECOLUMNS(     ROLLUPADDISSUBTOTAL(      'Trafikdygn'[År], \"IsGrandTotalRowTotal\",      ROLLUPGROUP('Trafikdygn'[Månad (namn)], 'Trafikdygn'[Månad]),      \"IsDM1Total\",      NONVISUAL(__DM3FilterTable)     ),     __DS0FilterTable,     __DS0FilterTable2,     __DS0FilterTable3,     __DS0FilterTable4,     __DS0FilterTable5    )     VAR __DS0PrimaryWindowed =     TOPN(     502,     __DS0Core,     [IsGrandTotalRowTotal],     0,     'Trafikdygn'[År],     0,     [IsDM1Total],     0,     'Trafikdygn'[Månad],     1,     'Trafikdygn'[Månad (namn)],     1    )    EVALUATE   __DS0PrimaryWindowed    ORDER BY   [IsGrandTotalRowTotal] DESC,   'Trafikdygn'[År] DESC,   [IsDM1Total] DESC,   'Trafikdygn'[Månad],   'Trafikdygn'[Månad (namn)]  ",
+      "rls": {
+        "enabled": true,
+        "mode": "Flera användare (rotation)",
+        "users": [
+          {
+            "username": "adrian.nykvist-westerberg@sl.se",
+            "roles": []
+          },
+          {
+            "username": "agnes.k.hansson@sl.se",
+            "roles": []
+          }
+        ]
+      },
+      "mode": "Flera queries (rotation)",
+      "params": [
+        {
+          "name": "fartyg",
+          "mode": "Slumpa",
+          "values": [
+            "Dalarö",
+            "Viberö"
+          ],
+          "type": "text"
+        },
+        {
+          "name": "fartyg_2",
+          "mode": "Slumpa",
+          "values": [
+            "Vaxö",
+            "Djurgården 8"
+          ],
+          "type": "text"
+        },
+        {
+          "name": "år",
+          "mode": "Slumpa",
+          "values": [
+            "2024",
+            "2025",
+            "2026"
+          ],
+          "type": "number"
+        },
+        {
+          "name": "år_2",
+          "mode": "Slumpa",
+          "values": [
+            "2022",
+            "2023"
+          ],
+          "type": "number"
+        }
+      ]
+    }
+  },
+  "cf4ea93c-53ab-4683-a86f-0e640d47f934::a97209f8-f64f-42ae-9336-9c021eacf1e1": {
+    "Fartygsdata_prototyp_rls": {
+      "dax": "EVALUATE SUMMARIZECOLUMNS(\"Count\", COUNTROWS('fartyg_fartygsdata_2025'))\n---\nEVALUATE SUMMARIZECOLUMNS(\"Count\", COUNTROWS('fartyg_fartygsdata_2026'))",
+      "rls": {
+        "enabled": true,
+        "mode": "Flera användare (rotation)",
+        "users": [
+          {
+            "username": "jukka.askvinge@sl.se",
+            "roles": []
+          },
+          {
+            "username": "henrik.sabouri@sl.se",
+            "roles": []
+          },
+          {
+            "username": "Emma.Damberg@sl.se",
+            "roles": []
+          },
+          {
+            "username": "erik.lindberg@sl.se",
+            "roles": []
+          }
+        ]
+      },
+      "mode": "Flera queries (rotation)"
+    }
+  }
+}

@@ -1,0 +1,319 @@
+Bygg en lokal lasttestar-applikation för Power BI semantiska modeller i Python med Streamlit.
+Applikationen körs lokalt via: python -m streamlit run app.py
+
+Beroenden (requirements.txt):
+  streamlit>=1.32.0
+  requests>=2.31.0
+  pandas>=2.0.0
+  plotly>=5.18.0
+
+Allt läggs i en enda fil: app.py
+En separat fil dax_library.json skapas automatiskt för sparade profiler.
+
+────────────────────────────────────────────────
+DESIGN
+────────────────────────────────────────────────
+Mörkt tema med dessa färger:
+  Bakgrund:        #0d1117
+  Paneler:         #161b22
+  Borders:         #21262d
+  Accent/framgång: #00d4aa
+  Varning/P95:     #f0b429
+  Fel/P99:         #ef4444
+  Muted text:      #8b949e
+
+Typsnitt: IBM Plex Mono (Google Fonts) för metriker och kodnära element.
+CSS injiceras via st.markdown() unsafe_allow_html=True.
+Metric cards och logg-box har egna CSS-klasser.
+
+Viktigt om Streamlit widget-API:
+  Knappar använder width="stretch" (INTE use_container_width=True).
+  st.plotly_chart och st.dataframe använder use_container_width=True.
+
+────────────────────────────────────────────────
+AUTENTISERING (sidopanel)
+────────────────────────────────────────────────
+selectbox med två alternativ: "Manuell token" och "Service Principal".
+
+Manuell token:
+  text_area för att klistra in ett Bearer Token.
+  Hjälptext: hämtas via
+    az account get-access-token --resource https://analysis.windows.net/powerbi/api --query accessToken -o tsv
+
+Service Principal:
+  text_input: Tenant ID
+  text_input: Client ID
+  text_input: Client Secret (type="password")
+  Token hämtas via POST https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token
+    grant_type=client_credentials, scope=https://analysis.windows.net/powerbi/api/.default
+  Token cachas i st.session_state med 55 minuters TTL.
+
+Funktioner:
+  fetch_sp_token(tenant_id, client_id, client_secret) -> str
+  resolve_token(auth_mode, tenant_id, client_id, client_secret, manual_token) -> str
+
+────────────────────────────────────────────────
+VAL AV SEMANTISK MODELL (sidopanel)
+────────────────────────────────────────────────
+När token finns hämtas workspaces och datasets via REST API som kaskad-dropdowns.
+Under varje dropdown visas GUID som caption. Cachas med @st.cache_data(ttl=120).
+
+Workspace-dropdown:
+  GET https://api.powerbi.com/v1.0/myorg/groups
+  Sorteras alfabetiskt. Spara workspace_id (GUID) och workspace_name (visningsnamn).
+
+Dataset-dropdown:
+  GET https://api.powerbi.com/v1.0/myorg/groups/{workspaceId}/datasets
+  Visas som "Namn (defaultMode)" t.ex. "Fartygsdata (DirectLake)".
+
+Fallback om token saknas: manuella text_input för Workspace ID och Dataset ID.
+
+────────────────────────────────────────────────
+ROW LEVEL SECURITY (sidopanel)
+────────────────────────────────────────────────
+st.toggle (key="rls_toggle") aktiverar RLS.
+st.radio (key="rls_mode_radio"): "En användare" eller "Flera användare (rotation)"
+
+En användare:
+  text_input UPN (key="rls_single_user")
+  text_input roller kommaseparerade (key="rls_single_roles")
+
+Flera användare (rotation):
+  text_area (key="rls_multi_text"), en per rad.
+  Format: upn@domain.se  ELLER  upn@domain.se | Roll1, Roll2
+  Parsas till: [{"username": "...", "roles": [...]}]
+  Roteras: rls_users[i % len(rls_users)]
+
+effectiveIdentity skickas ALLTID i request body (även utan RLS aktiverat):
+  body["impersonatedUserName"] = username  (om RLS aktivt)
+  body["effectiveIdentity"] = [{
+    "username":   username eller "pbi-load-tester",
+    "datasets":   [{"id": dataset_id}],
+    "customData": username eller session_tag,
+    "roles":      [...]
+  }]
+
+────────────────────────────────────────────────
+LASTKONFIGURATION (sidopanel)
+────────────────────────────────────────────────
+Session-etikett: text_input, default datetime.now().strftime("test-%Y%m%d")
+
+Rate limiting (st.expander):
+  st.toggle "Begränsa anrop per minut"
+  st.slider max_per_minute (10-200, default 60, step 10)
+
+  Klass RateLimiter (token bucket, threading.Lock):
+    acquire(): väntar tills token finns, räknar throttle_count
+
+  KRITISKA regler:
+    Deklarera UTAN typannotering: _rate_limiter = RateLimiter(0)
+    Lagra i st.session_state["_rate_limiter"] vid körning.
+    I run_dax(): st.session_state.get("_rate_limiter", _rate_limiter).acquire()
+    Använd INTE global-nyckelordet.
+    i_counter = [0] (lista), i_counter[0] += 1 inuti nästlad funktion.
+    Använd INTE nonlocal.
+
+st.radio "Körläge": ["Iterationer", "Tidsbaserat"]
+
+Iterationer:
+  number_input: Iterationer (1-5000, default 20)
+  number_input: Parallella anrop (1-50, default 3)
+  number_input: Fast fördröjning ms (0-10000, default 0)
+
+Tidsbaserat:
+  number_input körtid + selectbox enhet (sekunder/minuter/timmar)
+  number_input: Max parallella anrop (1-50, default 5)
+  selectbox: Trafikprofil
+
+  Funktion next_delay_seconds(profile, elapsed, duration_sec, concurrency) -> float:
+
+  "Vågor (burst + paus)":
+    wave = math.sin(elapsed * 2 * math.pi / 30)
+    return random.uniform(0.05,0.3) if wave > 0.3 else random.uniform(2.0,6.0)
+
+  "Kontorstider (trappa upp/ner)":
+    progress = elapsed / max(duration_sec, 1)
+    intensity = progress/0.2 if progress<0.2 else 1.0 if progress<0.8 else (1.0-progress)/0.2
+    return max(0.05, 2.0 - intensity*1.8) + random.uniform(-0.1, 0.1)
+
+  "Slumpmässig":
+    return random.choice([random.uniform(0.05,0.3), random.uniform(0.5,2.0), random.uniform(3.0,8.0)])
+
+  "Konstant": return 0.05
+
+────────────────────────────────────────────────
+SIDOPANELENS ORDNING
+────────────────────────────────────────────────
+1. Rubrik "⚡ PBI Load Tester"
+2. Autentisering
+3. Semantisk modell
+4. Row Level Security
+5. Lastkonfiguration
+
+────────────────────────────────────────────────
+DAX-EDITOR (huvudvy)
+────────────────────────────────────────────────
+KRITISK ORDNING: profile_load POPpas och session_state skrivs INNAN widgets renderas.
+
+  _prefill = st.session_state.pop("profile_load", None)
+  if _prefill:
+      st.session_state["query_mode_radio"] = _prefill.get("mode", "Enkel query")
+      st.session_state["dax_single_input"] = _prefill.get("dax", 'EVALUATE ROW("Ping", 1)')
+      st.session_state["dax_multi_input"]  = _prefill.get("dax", 'EVALUATE ROW("Ping", 1)')
+      st.session_state["dax_params"]       = _prefill.get("params", [])
+
+st.radio key="query_mode_radio": ["Enkel query", "Flera queries (rotation)"]
+Enkel query: text_area key="dax_single_input", height=130
+Flera queries: text_area key="dax_multi_input", height=160, separera med ---
+
+────────────────────────────────────────────────
+DAX-PARAMETRAR (expander under DAX-editorn)
+────────────────────────────────────────────────
+st.expander "Parametrar" visar antal detekterade platshållare.
+
+Platshållar-syntax i DAX: {{paramnamn}}
+Exempel:
+  TREATAS({"{{fartyg}}"}, 'Fartyg'[Fartygsnamn])   <- text med citattecken i DAX
+  TREATAS({{{ar}}}, 'Trafikdygn'[Ar])               <- nummer utan citattecken
+
+Detektering: re.findall(r"\{\{(\w+)\}\}", dax_text)
+Synka session_state["dax_params"] mot detekterade platshållare.
+
+För varje platshållare: selectbox Typ (text/number/date), selectbox Läge, text_input Värden.
+
+Funktion apply_dax_params(dax, params, iteration) -> str:
+  Ersätter {{param}} med värdet RAKT AV utan att lägga till/ta bort citattecken.
+  Citattecken i DAX-queryn hanteras av DAX-texten, inte av funktionen.
+
+  Exempelresultat:
+    TREATAS({"{{fartyg}}"}, ...) + värde "Viberö" -> TREATAS({"Viberö"}, ...)
+    TREATAS({{{ar}}}, ...)       + värde "2025"   -> TREATAS({2025}, ...)
+
+  Undantag: date-typ konverterar "YYYY-MM-DD" -> "DATE(yyyy, mm, dd)".
+
+  Normalisering av värden (kritiskt för åäö):
+    unicodedata.normalize("NFC", val).strip()
+    Ta bort kontrolltecken: "".join(c for c in val if unicodedata.category(c) != "Cc")
+    Ersätt typografiska citattecken: \u201c->" \u201d->" \u2018->' \u2019->'
+
+  Lägeslogik:
+    "Rotation": values[iteration % len(values)]
+    "Fast":     values[0]
+    "Slumpa":   random.choice(values)
+
+  Anropas i körloopen INNAN run_dax():
+    dax = apply_dax_params(queries[i % n], st.session_state.get("dax_params",[]), i)
+
+────────────────────────────────────────────────
+DAX VAR-INJEKTION FÖR LOGGSPÅRNING
+────────────────────────────────────────────────
+Sker i run_dax() EFTER apply_dax_params.
+Normalisera hela strängen: unicodedata.normalize("NFC", dax.strip())
+
+tracking_vars byggs med strängkonkatenation (inte f-strängar med escaped \n):
+  "VAR _Session          = \"" + session_tag + "\"\n" +
+  "VAR _ImpersonatedUser = \"" + (username or "anon") + "\"\n" +
+  "VAR _CorrelationId    = \"" + corr_id + "\"\n"
+
+Fall 1 - börjar med EVALUATE:
+  Wrappa: EVALUATE\n{tracking_vars}RETURN\n{kropp utan EVALUATE}
+
+Fall 2 - börjar med DEFINE:
+  define_end = dax.index("DEFINE") + len("DEFINE")
+  dax = dax[:define_end] + "\n" + tracking_vars + dax[define_end:]
+
+Fall 3 - okänt: prependa kommentar "// session:X user:Y\n"
+
+KQL för analys:
+  SemanticModelLogs
+  | where QueryText contains "_Session"
+  | extend
+      Session = extract(@'_Session\s+=\s+"([^"]+)"', 1, QueryText),
+      User    = extract(@'_ImpersonatedUser\s+=\s+"([^"]+)"', 1, QueryText)
+  | summarize count(), percentile(DurationMs,50), percentile(DurationMs,95) by User, Session
+
+────────────────────────────────────────────────
+API-ANROP (run_dax)
+────────────────────────────────────────────────
+Returnerar alltid: (duration_ms, rows, error, correlation_id)
+
+Headers: Authorization, Content-Type: application/json; charset=utf-8, X-PowerBI-CorrelationId
+
+Endpoint:
+  POST https://api.powerbi.com/v1.0/myorg/groups/{ws}/datasets/{ds}/executeQueries
+  Body: {"queries": [{"query": dax}], "serializerSettings": {"includeNulls": true}}
+
+KRITISKT - svenska tecken:
+  json_bytes = json.dumps(body, ensure_ascii=False).encode("utf-8")
+  requests.post(url, data=json_bytes, headers=headers, timeout=timeout)
+  Använd INTE json=body - det ASCII-escapar åäö till \u00e5 etc.
+
+HTTP 429: max 3 retry med exponential backoff, respektera Retry-After-header.
+
+────────────────────────────────────────────────
+PROFILER
+────────────────────────────────────────────────
+st.expander under DAX-parametrar. Nyckel: workspace_id::dataset_id
+
+JSON-struktur per profil:
+  {
+    "dax":    "...",
+    "mode":   "Enkel query" / "Flera queries (rotation)",
+    "params": [{"name":"fartyg","mode":"Slumpa","values":["Viberö","Cinderella"],"type":"text"}],
+    "rls":    {"enabled":true,"mode":"Flera användare (rotation)","users":[...]}
+  }
+
+Ladda: skriv till session_state för ALLA nycklar + st.rerun()
+Spara: inkludera alltid params i profilen
+Ta bort: ta bort nyckel + spara JSON + st.rerun()
+
+────────────────────────────────────────────────
+KÖRMOTOR
+────────────────────────────────────────────────
+Synkront i Streamlits huvud-tråd, ThreadPoolExecutor för parallellism.
+
+I båda lägena:
+  dax = apply_dax_params(queries[i % n], st.session_state.get("dax_params",[]), i)
+  fut = pool.submit(run_dax, token, workspace_id, dataset_id, dax, identity, session_tag)
+
+Tidsbaserat: while-loop, skörda klara futures utan blockering, time.sleep(next_delay_seconds(...))
+
+Live-UI: 4 st.empty() - progressbar, status, logg (senaste 40 rader), diagram (var 5:e anrop)
+
+Loggformat:
+  [HH:MM:SS.mmm]  CHECKMARK #001  243 ms  [anna@sl.se]  - 847 rader
+  [HH:MM:SS.mmm]  X #002  1613 ms  - HTTP 400: ...
+
+────────────────────────────────────────────────
+STATISTIK
+────────────────────────────────────────────────
+p50/p95/p99 via pd.Series(ok).quantile(), throughput = queries/sekund
+6 metric cards + 3 flikar: scatter, histogram, rådata med CSV-export
+
+────────────────────────────────────────────────
+VANLIGA FALLGROPAR
+────────────────────────────────────────────────
+1. global/nonlocal fungerar inte i Streamlit-skript-scope.
+   Lösning: listor [0] eller st.session_state.
+
+2. Typannoterade modulvariabler (x: Type = val) kan inte global-deklareras.
+
+3. Streamlit ignorerar value=/index= på widgets med befintlig session_state-nyckel.
+   Lösning: skriv till st.session_state["key"] INNAN widgeten renderas.
+
+4. Bakgrundstrådar kan inte uppdatera st.session_state.
+
+5. width="stretch" på knappar. Undantag: plotly_chart/dataframe använder use_container_width=True.
+
+6. nonlocal fungerar inte i nästlade funktioner inuti if-block.
+   Lösning: i_counter = [0], i_counter[0] += 1.
+
+7. requests json=body ASCII-escapar åäö.
+   Lösning: json.dumps(body, ensure_ascii=False).encode("utf-8") + data= istället för json=.
+
+8. DAX-parameterersättning ska INTE lägga till citattecken.
+   Fel: "{{fartyg}}" -> ""Viberö"" (dubbla citattecken)
+   Rätt: "{{fartyg}}" -> "Viberö" (ett par, redan i DAX-texten)
+
+9. DEFINE-queries: injicera tracking-VARs inuti DEFINE-blocket.
+   EVALUATE-queries: wrappa med VAR...RETURN.
