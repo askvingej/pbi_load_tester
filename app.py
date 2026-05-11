@@ -135,6 +135,20 @@ def save_dax_library(lib: dict):
 def dax_library_key(workspace_id: str, dataset_id: str) -> str:
     return f"{workspace_id}::{dataset_id}"
 
+def workspace_config_key(workspace_id: str) -> str:
+    return f"__ws_config__{workspace_id}"
+
+def load_workspace_config(workspace_id: str) -> dict:
+    """Hämtar sparad Eventhouse-konfiguration för ett workspace."""
+    lib = load_dax_library()
+    return lib.get(workspace_config_key(workspace_id), {})
+
+def save_workspace_config(workspace_id: str, config: dict):
+    """Sparar Eventhouse-konfiguration för ett workspace."""
+    lib = load_dax_library()
+    lib[workspace_config_key(workspace_id)] = config
+    save_dax_library(lib)
+
 
 # ─── DAX-parameterisering ─────────────────────────────────────────────────────
 def apply_dax_params(dax: str, params: list[dict], iteration: int) -> str:
@@ -155,13 +169,9 @@ def apply_dax_params(dax: str, params: list[dict], iteration: int) -> str:
     import re
 
     def format_value(val: str, typ: str) -> str:
-        # Normalisera unicode och ta bort osynliga tecken
         import unicodedata
         val = unicodedata.normalize("NFC", val).strip()
-        # Ta bort alla kontrolltecken utom vanligt whitespace
         val = "".join(c for c in val if unicodedata.category(c) != "Cc")
-        if typ == "number":
-            return val
         if typ == "date":
             try:
                 from datetime import datetime as dt
@@ -169,28 +179,23 @@ def apply_dax_params(dax: str, params: list[dict], iteration: int) -> str:
                 return f"DATE({d.year}, {d.month}, {d.day})"
             except Exception:
                 return val
-        # text — escapa inbyggda citattecken med dubbla citattecken (DAX-standard)
+        if typ == "number":
+            # Auto-detektera: om värdet inte är ett rent tal behandla det som text
+            import re as _re
+            if _re.match(r'^-?\d+(\.\d+)?$', val):
+                return val
+            else:
+                escaped = val.replace('"', '""')
+                return f'"{escaped}"'
+        # text
         escaped = val.replace('"', '""')
         return f'"{escaped}"'
 
     for param in params:
-        name   = param.get("name", "").strip()
-        mode   = param.get("mode", "Slumpa")
-        # Normalisera alla varianter av citattecken till vanliga ASCII-citattecken
-        raw_values = param.get("values", [])
-        values = []
-        for v in raw_values:
-            v = v.strip()
-            # Ersätt typografiska citattecken med ASCII-citattecken
-            v = v.replace("\u201c", '"').replace("\u201d", '"')
-            v = v.replace("\u2018", "'").replace("\u2019", "'")
-            if v:
-                values.append(v)
-        typ    = param.get("type", "text")
+        name = param.get("name", "").strip()
+        mode = param.get("mode", "Slumpa")
+        typ  = param.get("type", "text")
 
-    for param in params:
-        name   = param.get("name", "").strip()
-        mode   = param.get("mode", "Slumpa")
         raw_values = param.get("values", [])
         values = []
         for v in raw_values:
@@ -199,7 +204,6 @@ def apply_dax_params(dax: str, params: list[dict], iteration: int) -> str:
             v = v.replace("\u2018", "'").replace("\u2019", "'")
             if v:
                 values.append(v)
-        typ = param.get("type", "text")
 
         if not name or not values:
             continue
@@ -592,7 +596,695 @@ def fetch_datasets(token, workspace_id):
     items = r.json().get("value", [])
     return sorted(items, key=lambda x: x.get("name", "").lower())
 
-# ─── Sidebar ──────────────────────────────────────────────────────────────────
+
+# ─── Eventhouse / KQL-logg ────────────────────────────────────────────────────
+def get_kusto_token_via_cli() -> str:
+    """
+    Hämtar ett Kusto-token automatiskt via Azure CLI (az).
+    Provar flera varianter för att hantera Windows PATH-problem.
+    """
+    import subprocess, shutil
+
+    resource = "https://kusto.kusto.windows.net"
+    args_variants = [
+        ["az", "account", "get-access-token", "--resource", resource, "--query", "accessToken", "-o", "tsv"],
+        ["cmd", "/c", "az", "account", "get-access-token", "--resource", resource, "--query", "accessToken", "-o", "tsv"],
+    ]
+
+    # Försök också hitta az.cmd explicit på Windows
+    az_cmd = shutil.which("az") or shutil.which("az.cmd")
+    if az_cmd:
+        args_variants.insert(0, [az_cmd, "account", "get-access-token", "--resource", resource, "--query", "accessToken", "-o", "tsv"])
+
+    last_err = ""
+    for args in args_variants:
+        try:
+            result = subprocess.run(
+                args,
+                capture_output=True, text=True, timeout=15,
+                shell=False,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+            last_err = result.stderr.strip() or f"returncode={result.returncode}"
+        except FileNotFoundError:
+            last_err = f"Kommando ej hittat: {args[0]}"
+            continue
+        except Exception as e:
+            last_err = str(e)
+            continue
+
+    raise ValueError(
+        f"Kunde inte hämta Kusto-token via Azure CLI.\n"
+        f"Sista fel: {last_err}\n\n"
+        f"Kontrollera att Azure CLI är installerat och att du kört 'az login'.\n"
+        f"Ladda ner: https://aka.ms/installazurecliwindows"
+    )
+
+
+def resolve_kusto_token() -> str:
+    """
+    Returnerar ett giltigt Kusto-token.
+    Hämtar via Azure CLI och cachar i session_state i 55 minuter.
+    """
+    cache = st.session_state.get("kusto_token_cache")
+    if cache and cache["exp"] > time.time():
+        return cache["tok"]
+    # Hämta nytt token — låt undantag propagera upp till UI
+    tok = get_kusto_token_via_cli()
+    st.session_state["kusto_token_cache"] = {
+        "tok": tok,
+        "exp": time.time() + 55 * 60,
+    }
+    return tok
+    """
+    Slår upp databas-GUID via PrettyName. Kör .show databases och matchar läsbart namn.
+    Returnerar GUID om hittat, annars friendly_name som fallback.
+    """
+    url = f"{cluster_url.rstrip('/')}/v1/rest/query"
+    headers = {
+        "Authorization": f"Bearer {resolve_kusto_token()}",
+        "Content-Type":  "application/json; charset=utf-8",
+        "Accept":        "application/json",
+    }
+    body = {
+        "db":  "NetDefaultDB",
+        "csl": ".show databases",
+        "properties": {"Options": {"queryconsistency": "strongconsistency"}},
+    }
+    try:
+        r = requests.post(
+            url,
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers=headers,
+            timeout=15,
+        )
+        if not r.ok:
+            return friendly_name  # fallback
+
+        data    = r.json()
+        tables  = data.get("Tables", [])
+        if not tables:
+            return friendly_name
+
+        rows    = tables[0].get("Rows", [])
+        columns = tables[0].get("Columns", [])
+        col_names = [c.get("ColumnName", "") for c in columns]
+
+        # Hitta index för DatabaseName och PrettyName
+        try:
+            db_idx     = col_names.index("DatabaseName")
+            pretty_idx = col_names.index("PrettyName") if "PrettyName" in col_names else -1
+        except ValueError:
+            return friendly_name
+
+        needle = friendly_name.lower().strip()
+        for row in rows:
+            db_name     = str(row[db_idx]) if row[db_idx] else ""
+            pretty_name = str(row[pretty_idx]) if pretty_idx >= 0 and row[pretty_idx] else ""
+            if (db_name.lower() == needle or pretty_name.lower() == needle):
+                return db_name  # returnera det exakta namnet/GUID:et som Kusto förstår
+
+        # Inget exakt match — prova partiell matchning
+        for row in rows:
+            db_name     = str(row[db_idx]) if row[db_idx] else ""
+            pretty_name = str(row[pretty_idx]) if pretty_idx >= 0 and row[pretty_idx] else ""
+            if (needle in db_name.lower() or needle in pretty_name.lower()):
+                return db_name
+
+        return friendly_name  # inget match — returnera originalnamnet
+    except Exception:
+        return friendly_name
+
+
+def resolve_kusto_database(cluster_url: str, friendly_name: str, token: str) -> str:
+    """
+    Slår upp databas-GUID via PrettyName. Kör .show databases och matchar läsbart namn.
+    Returnerar GUID om hittat, annars friendly_name som fallback.
+    """
+    url = f"{cluster_url.rstrip('/')}/v1/rest/query"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type":  "application/json; charset=utf-8",
+        "Accept":        "application/json",
+    }
+    body = {
+        "db":  "NetDefaultDB",
+        "csl": ".show databases",
+        "properties": {"Options": {"queryconsistency": "strongconsistency"}},
+    }
+    try:
+        r = requests.post(
+            url,
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers=headers,
+            timeout=15,
+        )
+        if not r.ok:
+            return friendly_name
+
+        tables = r.json().get("Tables", [])
+        if not tables:
+            return friendly_name
+
+        rows      = tables[0].get("Rows", [])
+        columns   = tables[0].get("Columns", [])
+        col_names = [c.get("ColumnName", "") for c in columns]
+
+        try:
+            db_idx = col_names.index("DatabaseName")
+        except ValueError:
+            return friendly_name
+        pt_idx = col_names.index("PrettyName") if "PrettyName" in col_names else -1
+
+        needle = friendly_name.strip().lower()
+
+        # Exakt match på PrettyName → returnera DatabaseName (GUID)
+        for row in rows:
+            db_name = str(row[db_idx]) if row[db_idx] else ""
+            pretty  = str(row[pt_idx]) if pt_idx >= 0 and row[pt_idx] else ""
+            if pretty.lower() == needle:
+                return db_name
+
+        # Exakt match på DatabaseName
+        for row in rows:
+            db_name = str(row[db_idx]) if row[db_idx] else ""
+            if db_name.lower() == needle:
+                return db_name
+
+        # Partiell matchning som fallback
+        for row in rows:
+            db_name = str(row[db_idx]) if row[db_idx] else ""
+            pretty  = str(row[pt_idx]) if pt_idx >= 0 and row[pt_idx] else ""
+            if needle in pretty.lower() or needle in db_name.lower():
+                return db_name
+
+        return friendly_name
+    except Exception:
+        return friendly_name
+
+
+def fetch_top_queries_from_logs(
+    token: str,
+    cluster_url: str,
+    database: str,
+    workspace_id: str,
+    dataset_id: str,
+    top_n: int = 20,
+    min_count: int = 2,
+) -> list[dict]:
+    """
+    Hämtar de N vanligast körda DAX-queries från SemanticModelLogs.
+    Hämtar Kusto-token automatiskt via Azure CLI.
+    """
+    auth_token = resolve_kusto_token()
+
+    # Validera att workspace_id och dataset_id är rena GUIDs
+    import re as _re_guid
+    def _is_guid(s):
+        return bool(_re_guid.match(
+            r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+            s.strip().lower()
+        ))
+
+    if not _is_guid(workspace_id):
+        raise ValueError(f"workspace_id är inte ett giltigt GUID: '{workspace_id}'")
+    if not _is_guid(dataset_id):
+        raise ValueError(f"dataset_id är inte ett giltigt GUID: '{dataset_id}'")
+
+    # Bygg KQL med separata variabler för att undvika f-strängsproblem
+    ws_id_clean = workspace_id.strip().lower()
+    ds_id_clean = dataset_id.strip().lower()
+
+    # Slå upp databas-GUID och bygg gemensamma headers
+    resolved_db  = resolve_kusto_database(cluster_url, database, auth_token)
+    url          = f"{cluster_url.rstrip('/')}/v1/rest/query"
+    headers = {
+        "Authorization":           f"Bearer {auth_token}",
+        "Content-Type":            "application/json; charset=utf-8",
+        "Accept":                  "application/json",
+        "x-ms-client-request-id": str(uuid.uuid4()),
+    }
+
+    # Undersök vilka kolumner som finns i SemanticModelLogs
+    _schema_kql = "SemanticModelLogs | getschema | project ColumnName"
+    _schema_body = {
+        "db":  resolved_db,
+        "csl": _schema_kql,
+        "properties": {"Options": {"queryconsistency": "strongconsistency"}},
+    }
+    _schema_r = requests.post(
+        url,
+        data=json.dumps(_schema_body, ensure_ascii=False).encode("utf-8"),
+        headers=headers,
+        timeout=15,
+    )
+    available_cols = []
+    if _schema_r.ok:
+        _tbl = _schema_r.json().get("Tables", [{}])[0]
+        available_cols = [row[0] for row in _tbl.get("Rows", []) if row]
+
+    # Välj rätt kolumnnamn baserat på vad som faktiskt finns
+    def _col(candidates):
+        for c in candidates:
+            if c in available_cols:
+                return c
+        return candidates[0]
+
+    col_workspace = _col(["WorkspaceId", "CapacityId", "TenantId", "CustomerTenantId"])
+    col_time      = _col(["TimeGenerated", "Timestamp", "EventTime", "StartTime"])
+    col_duration  = _col(["DurationMs", "Duration", "ExecutionTime"])
+    col_operation = _col(["OperationName", "Operation", "EventType"])
+
+    # Kontrollera tillgängliga kolumner för query-text
+    has_query_text = "QueryText" in available_cols
+    has_event_text = "EventText" in available_cols
+    has_app_ctx    = "ApplicationContext" in available_cols
+    has_item_id    = "ItemId" in available_cols
+
+    # Bygg dataset-filter
+    if has_item_id:
+        dataset_filter = "| where tolower(ItemId) == \"" + ds_id_clean + "\"\n"
+    else:
+        dataset_filter = ""
+
+    # Bygg query-extraktion — EventText är primärt för DAX-queries
+    if has_query_text:
+        query_col    = "QueryText"
+        query_extend = ""
+    elif has_event_text:
+        query_col    = "EventText"
+        query_extend = ""
+    elif has_app_ctx:
+        query_col    = "ExtractedQuery"
+        query_extend = "| extend ExtractedQuery = tostring(parse_json(ApplicationContext)[\"QueryText\"])\n"
+    else:
+        raise ValueError(
+            "Ingen lämplig kolumn för query-text hittades.\n"
+            f"Tillgängliga kolumner: {available_cols}"
+        )
+    kql = (
+        "SemanticModelLogs\n"
+        "| where " + col_operation + " == \"QueryEnd\"\n"
+        "| where tolower(WorkspaceId) == \"" + ws_id_clean + "\"\n"
+        + dataset_filter +
+        query_extend +
+        "| where isnotempty(" + query_col + ")\n"
+        "| extend CleanQuery = replace_regex(\n"
+        "    " + query_col + ",\n"
+        "    @'VAR _Session[^\\n]*\\n(VAR _ImpersonatedUser[^\\n]*\\n)?(VAR _CorrelationId[^\\n]*\\n)?',\n"
+        "    ''\n"
+        "  )\n"
+        "| extend CleanQuery = replace_regex(CleanQuery, @'\\s*\\[[A-Za-z]+Time:[^\\]]*\\]\\s*$', '')\n"
+        "| extend CleanQuery = trim(' \\t\\n\\r', CleanQuery)\n"
+        "| where strlen(CleanQuery) > 10\n"
+        "| where CleanQuery matches regex @'^\\s*(EVALUATE|DEFINE)'\n"
+        "| where CleanQuery !contains \"COLUMNSTATISTICS\"\n"
+        "| where CleanQuery !contains \"COARSECOLUMNTRAITS\"\n"
+        "| where CleanQuery !contains \"SYSTEMRESTRICTSCHEMA\"\n"
+        "| where CleanQuery !contains \"$SYSTEM\"\n"
+        "| where CleanQuery !contains \"__XL_\"\n"
+        "| where CleanQuery !contains \"COLUMNTRAITS\"\n"
+        "| summarize\n"
+        "    Count    = count(),\n"
+        "    AvgMs    = round(avg(toreal(" + col_duration + ")), 0),\n"
+        "    LastSeen = max(" + col_time + ")\n"
+        "  by CleanQuery\n"
+        "| where Count >= " + str(min_count) + "\n"
+        "| top " + str(top_n) + " by Count desc\n"
+        "| project CleanQuery, Count, AvgMs, LastSeen\n"
+    )
+
+    body = {
+        "db":  resolved_db,
+        "csl": kql,
+        "properties": {
+            "Options": {
+                "queryconsistency": "strongconsistency",
+                "request_readonly": True,
+            }
+        },
+    }
+    r = requests.post(
+        url,
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers=headers,
+        timeout=30,
+    )
+    if not r.ok:
+        col_info = f"\nHittade kolumner: {available_cols[:20]}" if available_cols else ""
+        raise ValueError(f"KQL-anrop misslyckades: HTTP {r.status_code}: {r.text[:400]}{col_info}")
+
+    data   = r.json()
+    tables = data.get("Tables", data.get("tables", []))
+    if not tables:
+        return [], kql
+
+    rows    = tables[0].get("Rows", tables[0].get("rows", []))
+    columns = tables[0].get("Columns", tables[0].get("columns", []))
+    col_names = [c.get("ColumnName", c.get("name", f"col{i}"))
+                 for i, c in enumerate(columns)]
+
+    result = []
+    for row in rows:
+        rec = dict(zip(col_names, row))
+        result.append({
+            "query":     rec.get("CleanQuery", ""),
+            "count":     int(rec.get("Count", 0)),
+            "avg_ms":    float(rec.get("AvgMs", 0)),
+            "last_seen": str(rec.get("LastSeen", "")),
+        })
+    return result, kql
+
+
+
+# ─── Mönsterigenkänning för DAX-queries ──────────────────────────────────────
+import re as _re_dax
+
+# Regex som matchar DAX-strängliteraler och numeriska värden
+_STR_RE  = _re_dax.compile(r'"([^"]*)"')
+_NUM_RE  = _re_dax.compile(r'\b(\d{4,}|\d+\.\d+)\b')
+_DATE_RE = _re_dax.compile(r'DATE\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)')
+
+# Regex för TREATAS({val1, val2, ...}, 'Tabell'[Kolumn])
+_TREATAS_RE = _re_dax.compile(
+    r"TREATAS\s*\(\s*\{([^}]+)\}\s*,\s*'?([^'\[]+)'?\s*\[([^\]]+)\]\s*\)",
+    _re_dax.IGNORECASE,
+)
+
+
+def _sanitize_param_name(s: str) -> str:
+    """Konverterar ett kolumnnamn till ett snake_case parameternamn."""
+    s = s.lower().strip()
+    for a, b in [("å","a"),("ä","a"),("ö","o"),(" ","_"),("-","_")]:
+        s = s.replace(a, b)
+    s = _re_dax.sub(r"[^a-z0-9_]", "_", s)
+    s = _re_dax.sub(r"_+", "_", s).strip("_")
+    return s[:25] or "param"
+
+
+def extract_treatas_params(dax: str) -> tuple[str, list[dict]]:
+    """
+    Hittar två mönster i en DAX-query och ersätter värdelistor med {{param}}-platshållare:
+
+    1. TREATAS({val1, val2}, 'Tabell'[Kolumn])
+    2. 'Tabell'[Kolumn] IN {"val1", "val2", ...}
+       eller NOT('Tabell'[Kolumn] IN {"val1", ...})
+
+    Returnerar (template_dax, params).
+    """
+    # Regex för 'Tabell'[Kolumn] IN {"val1", "val2"} eller {num1, num2}
+    _IN_RE = _re_dax.compile(
+        r"'?([^'\[]+)'?\s*\[([^\]]+)\]\s+IN\s+\{([^}]+)\}",
+        _re_dax.IGNORECASE,
+    )
+
+    params     = []
+    seen_names = {}
+    template   = dax
+
+    def _add_param(values_raw, col_name, original_expr, replacement_fn):
+        str_vals = _re_dax.findall(r'"([^"]*)"', values_raw)
+        num_vals = _re_dax.findall(r'\b(\d+(?:\.\d+)?)\b', values_raw) if not str_vals else []
+        values   = str_vals if str_vals else num_vals
+        typ      = "text" if str_vals else "number"
+        if not values:
+            return
+
+        base_name = _sanitize_param_name(col_name)
+        if base_name in seen_names:
+            seen_names[base_name] += 1
+            param_name = f"{base_name}_{seen_names[base_name]}"
+        else:
+            seen_names[base_name] = 0
+            param_name = base_name
+
+        nonlocal template
+        new_expr = replacement_fn(original_expr, values_raw, param_name, typ)
+        template = template.replace(original_expr, new_expr, 1)
+
+        params.append({
+            "name":   param_name,
+            "mode":   "Slumpa",
+            "values": list(dict.fromkeys(values)),
+            "type":   typ,
+        })
+
+    # Mönster 1: TREATAS({...}, 'Tabell'[Kolumn])
+    for m in _TREATAS_RE.finditer(dax):
+        values_raw   = m.group(1)
+        col_name     = m.group(3).strip()
+        original_set = m.group(0)
+
+        def treatas_replace(orig, vraw, pname, typ):
+            if typ == "text":
+                return orig.replace("{" + vraw + "}", '{"{{' + pname + '}}"}')
+            else:
+                return orig.replace("{" + vraw + "}", "{{{" + pname + "}}}")
+
+        _add_param(values_raw, col_name, original_set, treatas_replace)
+
+    # Mönster 2: 'Tabell'[Kolumn] IN {"val1", "val2"}
+    for m in _IN_RE.finditer(dax):
+        values_raw   = m.group(3)
+        col_name     = m.group(2).strip()
+        original_set = m.group(0)
+
+        # Hoppa över om detta redan ersatts av TREATAS
+        if "{{" in original_set:
+            continue
+
+        def in_replace(orig, vraw, pname, typ):
+            col_part = orig[:orig.index(" IN ") + 4]  # t.ex. "'Diverse'[Fartyg År] IN "
+            if typ == "text":
+                return col_part + '{"{{' + pname + '}}"}'
+            else:
+                return col_part + "{{{" + pname + "}}}"
+
+        _add_param(values_raw, col_name, original_set, in_replace)
+
+    return template, params
+
+def _extract_column_hint(dax: str, value: str, placeholder: str) -> str:
+    """
+    Försöker hitta ett bra parameternamn baserat på kontexten runt värdet i queryn.
+    Letar efter kolumnnamn i närheten: 'Tabell'[Kolumn] eller [Kolumn].
+    Returnerar ett sanerat snake_case-namn.
+    """
+    # Hitta positionen av värdet i queryn
+    pos = dax.find(f'"{value}"')
+    if pos < 0:
+        pos = dax.find(str(value))
+    if pos < 0:
+        return placeholder
+
+    # Ta ett fönster på 150 tecken runt värdet och leta efter [Kolumnnamn]
+    window = dax[max(0, pos-150):pos+150]
+    cols   = _re_dax.findall(r"\[([^\]]+)\]", window)
+    if not cols:
+        return placeholder
+
+    # Välj det kolumnnamn som är närmast, sanera till snake_case
+    best = cols[0]
+    name = best.lower()
+    name = _re_dax.sub(r"[åä]", "a", name)
+    name = _re_dax.sub(r"ö", "o", name)
+    name = _re_dax.sub(r"[^a-z0-9]+", "_", name)
+    name = name.strip("_")[:20]
+    return name or placeholder
+
+
+def _tokenize(dax: str) -> list[tuple[str, str]]:
+    """
+    Tokeniserar DAX-queryn till lista av (typ, värde):
+      "lit_str"  — strängliteral
+      "lit_num"  — numeriskt literal
+      "lit_date" — DATE()-uttryck
+      "text"     — övrig text
+    """
+    tokens = []
+    pos    = 0
+    for m in _re_dax.finditer(
+        r'DATE\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)|"[^"]*"|\b(?:\d{4,}|\d+\.\d+)\b',
+        dax
+    ):
+        if m.start() > pos:
+            tokens.append(("text", dax[pos:m.start()]))
+        raw = m.group()
+        if raw.startswith("DATE("):
+            tokens.append(("lit_date", raw))
+        elif raw.startswith('"'):
+            tokens.append(("lit_str", raw[1:-1]))  # utan citattecken
+        else:
+            tokens.append(("lit_num", raw))
+        pos = m.end()
+    if pos < len(dax):
+        tokens.append(("text", dax[pos:]))
+    return tokens
+
+
+def _queries_to_template(queries: list[str]) -> tuple[str, list[dict]]:
+    """
+    Tar en lista av strukturellt liknande DAX-queries och returnerar:
+      - template: DAX-text med {{paramN}} platshållare
+      - params: lista av parameterförslag [{name, mode, values, type}]
+
+    Algoritm:
+      1. Tokenisera alla queries.
+      2. Jämför token-för-token — om alla queries har samma token är det fast text,
+         annars är det en variabel position → platshållare.
+      3. Samla alla unika värden per platshållarposition som parameterförslag.
+    """
+    if not queries:
+        return "", []
+
+    if len(queries) == 1:
+        return queries[0], []
+
+    tokenized = [_tokenize(q) for q in queries]
+
+    # Normalisera längd — använd den vanligaste längden
+    lengths = [len(t) for t in tokenized]
+    target_len = max(set(lengths), key=lengths.count)
+    tokenized  = [t for t in tokenized if len(t) == target_len]
+    if not tokenized:
+        return queries[0], []
+
+    template_parts = []
+    params         = []
+    param_counter  = {}  # namn → räknare för suffix
+
+    for i in range(target_len):
+        types  = [t[i][0] for t in tokenized]
+        values = [t[i][1] for t in tokenized]
+        unique_vals = list(dict.fromkeys(values))  # ordnad deduplicering
+
+        first_type = types[0]
+        all_same_type = all(tp == first_type for tp in types)
+        all_same_val  = len(unique_vals) == 1
+
+        if all_same_val or first_type == "text":
+            # Fast position — lägg till som text
+            if first_type == "lit_str":
+                template_parts.append(f'"{values[0]}"')
+            else:
+                template_parts.append(values[0])
+        else:
+            # Variabel position — skapa platshållare
+            # Hitta ett bra namn baserat på kontext i första queryn
+            if first_type == "lit_str":
+                base_name = _extract_column_hint(queries[0], values[0], f"param{len(params)+1}")
+                typ       = "text"
+                # Lägg tillbaka citattecken i template om strängen var citerad
+                placeholder_in_dax = True
+            elif first_type == "lit_date":
+                base_name = "datum"
+                typ       = "date"
+                placeholder_in_dax = False
+            else:
+                base_name = _extract_column_hint(queries[0], values[0], f"varde{len(params)+1}")
+                typ       = "number"
+                placeholder_in_dax = False
+
+            # Unikt paramnamn
+            if base_name in param_counter:
+                param_counter[base_name] += 1
+                param_name = f"{base_name}_{param_counter[base_name]}"
+            else:
+                param_counter[base_name] = 0
+                param_name = base_name
+
+            placeholder = "{{" + param_name + "}}"
+            if placeholder_in_dax and first_type == "lit_str":
+                template_parts.append(f'"{placeholder}"')
+            else:
+                template_parts.append(placeholder)
+
+            # Normalisera datumvärden
+            if typ == "date":
+                norm_vals = []
+                for v in unique_vals:
+                    m = _re_dax.search(r'DATE\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)', v)
+                    if m:
+                        norm_vals.append(f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}")
+                    else:
+                        norm_vals.append(v)
+                unique_vals = norm_vals
+
+            params.append({
+                "name":   param_name,
+                "mode":   "Slumpa",
+                "values": unique_vals,
+                "type":   typ,
+            })
+
+    return "".join(template_parts), params
+
+
+def cluster_queries_by_pattern(
+    query_records: list[dict],
+    similarity_threshold: float = 0.75,
+) -> list[dict]:
+    """
+    Grupperar queries med liknande struktur och extraherar parametrar.
+    Returnerar lista av {template, params, queries, total_count, avg_ms}.
+
+    Likhetsmått: andel token-positioner som är identiska (strukturell likhet).
+    """
+    if not query_records:
+        return []
+
+    def structural_similarity(a: str, b: str) -> float:
+        ta, tb = _tokenize(a), _tokenize(b)
+        if len(ta) != len(tb):
+            # Olika längd — ge poäng baserat på längdöverlapp
+            shorter = min(len(ta), len(tb))
+            longer  = max(len(ta), len(tb))
+            return shorter / longer * 0.5  # max 50% likhet om längderna skiljer
+        matches = sum(1 for x, y in zip(ta, tb) if x[0] == y[0] and x[1] == y[1])
+        return matches / len(ta) if ta else 0.0
+
+    # Klustrera med greedy nearest-neighbour
+    used     = [False] * len(query_records)
+    clusters = []
+
+    for i, rec in enumerate(query_records):
+        if used[i]:
+            continue
+        cluster = [i]
+        used[i] = True
+        for j in range(i + 1, len(query_records)):
+            if used[j]:
+                continue
+            if structural_similarity(rec["query"], query_records[j]["query"]) >= similarity_threshold:
+                cluster.append(j)
+                used[j] = True
+        clusters.append(cluster)
+
+    result = []
+    for cluster_idxs in clusters:
+        recs     = [query_records[i] for i in cluster_idxs]
+        qs       = [r["query"] for r in recs]
+        template, params = _queries_to_template(qs)
+
+        # Om token-baserad klustring inte hittade parametrar, prova TREATAS-extraktion
+        if not params:
+            treatas_template, treatas_params = extract_treatas_params(qs[0])
+            if treatas_params:
+                template = treatas_template
+                params   = treatas_params
+
+        result.append({
+            "template":    template,
+            "params":      params,
+            "query_count": len(recs),
+            "total_count": sum(r["count"] for r in recs),
+            "avg_ms":      sum(r["avg_ms"] * r["count"] for r in recs) / max(sum(r["count"] for r in recs), 1),
+            "sample":      qs[0],
+        })
+
+    result.sort(key=lambda x: x["total_count"], reverse=True)
+    return result
 with st.sidebar:
     st.markdown("## ⚡ PBI Load Tester")
     st.divider()
@@ -610,9 +1302,9 @@ with st.sidebar:
             "Bearer Token",
             height=90,
             placeholder="eyJ0eXAiOiJKV1Qi...",
-            help="az account get-access-token --resource https://analysis.windows.net/powerbi/api --query accessToken -o tsv",
+            help="az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv",
         )
-        st.caption("Giltigt ~60 min. Hämtas via Azure CLI.")
+        st.caption("Fabric-token täcker både Power BI REST API och Eventhouse/KQL. Giltigt ~60 min.")
     else:
         tenant_id     = st.text_input("Tenant ID",     placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
         client_id     = st.text_input("Client ID",     placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
@@ -656,6 +1348,18 @@ with st.sidebar:
             workspace_id   = ws_ids[ws_idx]
             workspace_name = ws_labels[ws_idx]
             st.caption(f"ID: `{workspace_id}`")
+
+            # Auto-ladda sparad Eventhouse-konfiguration för detta workspace
+            _ws_cfg = load_workspace_config(workspace_id)
+            if _ws_cfg:
+                # Skriv till session_state bara om workspace byttes
+                if st.session_state.get("_last_ws_id") != workspace_id:
+                    st.session_state["eh_cluster"]  = _ws_cfg.get("cluster", "")
+                    st.session_state["eh_database"] = _ws_cfg.get("database", "")
+                    st.session_state["_last_ws_id"] = workspace_id
+            else:
+                if st.session_state.get("_last_ws_id") != workspace_id:
+                    st.session_state["_last_ws_id"] = workspace_id
 
             # ── Dataset-dropdown ────────────────────────────────────────
             with st.spinner("Hämtar semantiska modeller..."):
@@ -833,6 +1537,244 @@ with st.sidebar:
         iterations = 0
         delay_ms   = 0
 
+    st.divider()
+    st.markdown("### 📊 Hämta queries från logg")
+
+    with st.expander("⚙️ Eventhouse-konfiguration", expanded=not st.session_state.get("eh_cluster")):
+        if workspace_id:
+            st.caption(f"Konfiguration sparas per workspace: `{workspace_name}`")
+        eh_cluster = st.text_input(
+            "Eventhouse cluster-URL",
+            placeholder="https://xxxxxxxx.kusto.fabric.microsoft.com",
+            help="Hitta i Fabric: Eventhouse → System overview → Query URI",
+            key="eh_cluster",
+        )
+        # Applicera väntande databasval INNAN text_input renderas
+        _pending_db = st.session_state.pop("eh_database_pending", None)
+        if _pending_db is not None:
+            st.session_state["eh_database"] = _pending_db
+
+        eh_database = st.text_input(
+            "KQL-databas (läsbart namn)",
+            placeholder="Monitoring KQL database",
+            key="eh_database",
+            help="Skriv det läsbara namnet — appen slår upp GUID:et automatiskt",
+        )
+
+        # Knapp för att lista tillgängliga databaser
+        if st.button("🔍 Visa tillgängliga databaser", width="stretch",
+                     disabled=not (st.session_state.get("eh_cluster","").strip() and
+                                   _preview_token)):
+            with st.spinner("Hämtar databaser..."):
+                try:
+                    _url = f"{st.session_state['eh_cluster'].rstrip('/')}/v1/rest/query"
+                    _hdrs = {
+                        "Authorization": f"Bearer {resolve_kusto_token()}",
+                        "Content-Type":  "application/json; charset=utf-8",
+                        "Accept":        "application/json",
+                    }
+                    _bod = {
+                        "db": "NetDefaultDB", "csl": ".show databases",
+                        "properties": {"Options": {"queryconsistency": "strongconsistency"}},
+                    }
+                    _resp = requests.post(_url, data=json.dumps(_bod).encode("utf-8"),
+                                          headers=_hdrs, timeout=15)
+                    if _resp.ok:
+                        _tbl  = _resp.json().get("Tables", [{}])[0]
+                        _rows = _tbl.get("Rows", [])
+                        _cols = [c.get("ColumnName","") for c in _tbl.get("Columns",[])]
+                        _db_i = _cols.index("DatabaseName") if "DatabaseName" in _cols else 0
+                        _pt_i = _cols.index("PrettyName")   if "PrettyName"   in _cols else -1
+
+                        # Bygg lista med läsbara namn — visa PrettyName om det finns, annars DatabaseName
+                        _db_names = []
+                        for _row in _rows:
+                            _db_guid   = str(_row[_db_i]) if _row[_db_i] else ""
+                            _pretty    = str(_row[_pt_i]) if _pt_i >= 0 and _row[_pt_i] else ""
+                            _display   = _pretty if _pretty and _pretty != _db_guid else _db_guid
+                            _db_names.append(_display)
+
+                        st.session_state["eh_db_list"] = _db_names
+                        if not _db_names:
+                            st.warning("Inga databaser hittades.")
+                    else:
+                        st.error(f"Fel {_resp.status_code}: {_resp.text[:200]}")
+                except Exception as _ex:
+                    st.error(str(_ex))
+
+        # Visa databaserna som klickbara val
+        _db_list = st.session_state.get("eh_db_list", [])
+        if _db_list:
+            st.caption("Välj databas:")
+            for _db_name in _db_list:
+                if st.button(f"  {_db_name}", key=f"eh_db_pick_{_db_name}",
+                             use_container_width=True):
+                    st.session_state["eh_database_pending"] = _db_name
+                    st.rerun()
+
+        st.caption(
+            "Kusto-token hämtas automatiskt via Azure CLI (`az`). "
+            "Kontrollera att du är inloggad med `az login`."
+        )
+        if st.button("🔑 Testa Kusto-token", width="stretch"):
+            try:
+                tok = get_kusto_token_via_cli()
+                import base64 as _b64, json as _j
+                payload = tok.split(".")[1]
+                payload += "=" * ((4 - len(payload) % 4) % 4)
+                claims  = _j.loads(_b64.b64decode(payload))
+                st.success(f"✅ Token OK — aud={claims.get('aud','?')}, upn={claims.get('upn', claims.get('unique_name','?'))}")
+            except Exception as ex:
+                st.error(f"❌ {ex}")
+
+        save_col, status_col = st.columns([2, 3])
+        with save_col:
+            if st.button("💾 Spara konfiguration", width="stretch",
+                         disabled=not (workspace_id and eh_cluster and eh_database)):
+                save_workspace_config(workspace_id, {
+                    "cluster":  eh_cluster.strip(),
+                    "database": eh_database.strip(),
+                })
+                with status_col:
+                    st.success("Sparad!")
+
+        if workspace_id and st.session_state.get("eh_cluster"):
+            st.caption("✅ Eventhouse konfigurerat för detta workspace")
+
+    eh_top_n = st.number_input(
+        "Antal queries att hämta",
+        min_value=1, max_value=200, value=7,
+        key="eh_top_n",
+    )
+    eh_min_count = st.number_input(
+        "Minsta antal körningar",
+        min_value=1, max_value=1000, value=2,
+        help="Filtrera bort queries som körts färre gånger",
+        key="eh_min_count",
+    )
+
+    # Visa kontext för vad som ska hämtas
+    if workspace_id and dataset_id:
+        _ds_name = ds_labels[ds_idx] if "ds_labels" in dir() and ds_idx is not None else dataset_id[:8]
+        st.caption(f"Hämtar från: **{workspace_name}** → **{_ds_name}**")
+    elif workspace_id:
+        st.caption("Välj en semantisk modell ovan för att aktivera hämtning")
+
+    fetch_btn = st.button(
+        "🔍 Hämta vanligaste queries",
+        width="stretch",
+        disabled=not (
+            _preview_token and
+            workspace_id and
+            dataset_id and
+            st.session_state.get("eh_cluster", "").strip() and
+            st.session_state.get("eh_database", "").strip()
+        ),
+        help="Hämtar och grupperar de mest körda DAX-queries för vald modell",
+    )
+
+    if fetch_btn:
+        with st.spinner("Hämtar och analyserar queries från SemanticModelLogs..."):
+            try:
+                fetched, generated_kql = fetch_top_queries_from_logs(
+                    token        = _preview_token,
+                    cluster_url  = st.session_state["eh_cluster"].strip(),
+                    database     = st.session_state["eh_database"].strip(),
+                    workspace_id = workspace_id,
+                    dataset_id   = dataset_id,
+                    top_n        = int(st.session_state["eh_top_n"]),
+                    min_count    = int(st.session_state["eh_min_count"]),
+                )
+                st.session_state["eh_last_kql"] = generated_kql
+                if fetched:
+                    clustered = cluster_queries_by_pattern(fetched)
+                    st.session_state["eh_clustered"] = clustered
+                    st.success(
+                        f"✅ Hittade {len(fetched)} queries → "
+                        f"{len(clustered)} unika mönster"
+                    )
+                else:
+                    st.session_state["eh_clustered"] = []
+                    st.warning("Inga queries hittades — prova lägre 'Minsta antal körningar'")
+            except Exception as exc:
+                st.error(f"❌ {exc}")
+
+    if st.session_state.get("eh_last_kql"):
+        with st.expander("🔎 Visa genererad KQL-query", expanded=False):
+            st.code(st.session_state["eh_last_kql"], language="sql")
+            st.caption("Kopiera och kör direkt i Fabric Eventhouse för att felsöka.")
+    clustered = st.session_state.get("eh_clustered", [])
+    if clustered:
+        st.markdown(f"**Välj mönster att använda** ({len(clustered)} hittade):")
+
+        selected_clusters = []
+        for idx, cl in enumerate(clustered):
+            has_params = bool(cl["params"])
+            param_info = (
+                f" · {len(cl['params'])} param{'etrar' if len(cl['params'])>1 else 'eter'}"
+                if has_params else ""
+            )
+            label = (
+                f"Mönster #{idx+1} · {cl['total_count']}× körningar · "
+                f"{cl['avg_ms']:.0f}ms snitt · "
+                f"{cl['query_count']} varianter{param_info}"
+            )
+
+            with st.expander(label, expanded=False):
+                # Förhandsvisning av template
+                preview = cl["template"][:300].replace("\n", "\n")
+                st.code(preview + ("..." if len(cl["template"]) > 300 else ""), language="sql")
+
+                # Visa föreslagna parametrar
+                if cl["params"]:
+                    st.markdown("**Föreslagna parametrar:**")
+                    for p in cl["params"]:
+                        vals_str = ", ".join(p["values"][:5])
+                        if len(p["values"]) > 5:
+                            vals_str += f" ... (+{len(p['values'])-5})"
+                        st.caption(
+                            f"`{{{{{p['name']}}}}}` · typ={p['type']} · "
+                            f"{len(p['values'])} värden: {vals_str}"
+                        )
+                else:
+                    st.caption("Inga variabla delar hittades — mönstret är fast.")
+
+                if st.checkbox("Välj detta mönster", key=f"eh_cl_{idx}"):
+                    selected_clusters.append(idx)
+
+        if selected_clusters:
+            col_load, col_clear = st.columns(2)
+            with col_load:
+                if st.button("⬇ Lägg in i DAX-editorn", width="stretch", key="eh_load_btn"):
+                    templates = [clustered[i]["template"] for i in selected_clusters]
+                    combined  = "\n---\n".join(templates)
+
+                    # Slå ihop parametrar från alla valda mönster
+                    merged_params = {}
+                    for i in selected_clusters:
+                        for p in clustered[i]["params"]:
+                            if p["name"] not in merged_params:
+                                merged_params[p["name"]] = p.copy()
+                            else:
+                                existing = set(merged_params[p["name"]]["values"])
+                                merged_params[p["name"]]["values"] = list(
+                                    existing | set(p["values"])
+                                )
+
+                    # Använd pending-mönstret så att allt appliceras INNAN widgets renderas
+                    st.session_state["profile_load"] = {
+                        "dax":      combined,
+                        "mode":     "Enkel query" if len(templates) == 1 else "Flera queries (rotation)",
+                        "params":   list(merged_params.values()),
+                        "rls":      None,  # None = bevara befintlig RLS
+                    }
+                    st.rerun()
+
+            with col_clear:
+                if st.button("✕ Rensa lista", width="stretch", key="eh_clear_btn"):
+                    st.session_state["eh_clustered"] = []
+                    st.rerun()
+
 # ─── Huvudvy ──────────────────────────────────────────────────────────────────
 st.markdown("# ⚡ Power BI Semantic Model Load Tester")
 st.caption("Stresstesta DAX-queries mot din semantiska modell och mät svarstider i realtid.")
@@ -844,6 +1786,9 @@ if _prefill is not None:
     st.session_state["dax_multi_input"]  = _prefill.get("dax", 'EVALUATE ROW("Ping", 1)')
     st.session_state["query_mode_radio"] = _prefill.get("mode", "Enkel query")
     st.session_state["dax_params"]       = _prefill.get("params", [])
+    # Sätt rls_prefill bara om profilen har RLS (None = bevara befintlig)
+    if _prefill.get("rls") is not None:
+        st.session_state["rls_prefill"] = _prefill["rls"]
 
 query_mode = st.radio(
     "Query-läge",

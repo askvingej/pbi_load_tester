@@ -24,6 +24,9 @@ Appen öppnas automatiskt i din webbläsare på `http://localhost:8501`
 Hämta ett token via Azure CLI och klistra in det i appen:
 
 ```bash
+#  ℹ️ Token som täcker både anrop mot semantiska modeller och KQL-databas
+az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv
+
 az account get-access-token --resource https://analysis.windows.net/powerbi/api --query accessToken -o tsv
 ```
 

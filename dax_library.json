@@ -155,5 +155,70 @@
       },
       "mode": "Flera queries (rotation)"
     }
+  },
+  "__ws_config__cf4ea93c-53ab-4683-a86f-0e640d47f934": {
+    "cluster": "https://trd-yx5sb49k5h3br7jg7c.z4.kusto.fabric.microsoft.com/",
+    "database": "Monitoring Eventhouse"
+  },
+  "__ws_config__344bdc8c-dd4f-46ba-b64f-2cb797fa807f": {
+    "cluster": "https://trd-rapgyks5b16r25zb85.z2.kusto.fabric.microsoft.com/",
+    "database": "Monitoring Eventhouse"
+  },
+  "cf4ea93c-53ab-4683-a86f-0e640d47f934::7343fc12-6aee-4552-8ef2-57eb34f81fba": {
+    "Trafik_buss_rls_params": {
+      "dax": "DEFINE   VAR __DS0FilterTable =     TREATAS({\"{{intervall_trafik_timmar}}\"}, 'Planerad avgångstid starthållplats'[Intervall trafik timmar])     VAR __DS0FilterTable2 =     FILTER(     KEEPFILTERS(VALUES('Kalenderdygn'[Kalenderdygn])),     AND(      'Kalenderdygn'[Kalenderdygn] >= DATE(2025, 9, 29),      'Kalenderdygn'[Kalenderdygn] < DATE(2025, 11, 1)     )    )     VAR __DS0FilterTable3 =     TREATAS({{{linjenummer_internt}}}, 'Linje'[Linjenummer internt])     VAR __DS0FilterTable4 =     FILTER(     KEEPFILTERS(VALUES('Linje'[Trafikslag])),     AND('Linje'[Trafikslag] IN {\"{{trafikslag}}\"}, 'Linje'[Trafikslag] IN {\"{{trafikslag_1}}\"})    )     VAR __DS0FilterTable5 =     FILTER(KEEPFILTERS(VALUES('Hållplats'[Hållplats])), 'Hållplats'[Hållplats] <> \"Missing\")    EVALUATE   SUMMARIZECOLUMNS(    __DS0FilterTable,    __DS0FilterTable2,    __DS0FilterTable3,    __DS0FilterTable4,    __DS0FilterTable5,    \"Antal_observerade_trafikturer\", IGNORE('Buss stopp'[Antal observerade trafikturer]),    \"Antal_observerade_stopp\", IGNORE('Buss stopp'[Antal observerade stopp])   )",
+      "rls": {
+        "enabled": true,
+        "mode": "Flera användare (rotation)",
+        "users": [
+          {
+            "username": "jukka.askvinge@sl.se",
+            "roles": []
+          },
+          {
+            "username": "johan.jarpenmyr@sl.se",
+            "roles": []
+          }
+        ]
+      },
+      "mode": "Flera queries (rotation)",
+      "params": [
+        {
+          "name": "intervall_trafik_timmar",
+          "mode": "Slumpa",
+          "values": [
+            "06:00-08:59",
+            "09:00-10:59"
+          ],
+          "type": "text"
+        },
+        {
+          "name": "linjenummer_internt",
+          "mode": "Slumpa",
+          "values": [
+            "117",
+            "116",
+            "115"
+          ],
+          "type": "number"
+        },
+        {
+          "name": "trafikslag",
+          "mode": "Slumpa",
+          "values": [
+            "BUS"
+          ],
+          "type": "text"
+        },
+        {
+          "name": "trafikslag_1",
+          "mode": "Slumpa",
+          "values": [
+            "BUS"
+          ],
+          "type": "text"
+        }
+      ]
+    }
   }
 }
