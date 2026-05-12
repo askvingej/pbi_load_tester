@@ -105,6 +105,11 @@ def fetch_sp_token(tenant_id, client_id, client_secret):
     return r.json()["access_token"]
 
 def resolve_token(auth_mode, tenant_id, client_id, client_secret, manual_token):
+    if auth_mode == "Azure CLI (rekommenderat)":
+        tok = st.session_state.get("_last_token", "")
+        if not tok:
+            raise ValueError("Token saknas — klicka 🔑 Hämta alla tokens i autentiseringssektionen.")
+        return tok
     if auth_mode == "Manuell token":
         if not manual_token.strip():
             raise ValueError("Token saknas — klistra in ett Bearer Token.")
@@ -520,6 +525,640 @@ def render_results(results):
         st.dataframe(df_show, use_container_width=True, height=300)
         csv = df_show.to_csv(index=False).encode("utf-8")
         st.download_button("⬇ Ladda ner CSV", csv, "lasttest.csv", "text/csv")
+
+
+# ─── Performance Advisor ─────────────────────────────────────────────────────
+
+def _run_dmv(token: str, workspace_id: str, dataset_id: str, dmv_query: str) -> list[dict]:
+    """Kör en INFO DAX-query via executeQueries och returnerar rader som list[dict]."""
+    # INFO-funktioner behöver EVALUATE prefix
+    q = dmv_query.strip()
+    if not q.upper().startswith("EVALUATE"):
+        q = "EVALUATE " + q
+    url = (
+        f"https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}"
+        f"/datasets/{dataset_id}/executeQueries"
+    )
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type":  "application/json; charset=utf-8",
+    }
+    body = {"queries": [{"query": q}], "serializerSettings": {"includeNulls": True}}
+    r = requests.post(
+        url,
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers=headers,
+        timeout=30,
+    )
+    if not r.ok:
+        raise ValueError(f"DMV-fel {r.status_code}: {r.text[:300]}")
+    data  = r.json()
+    rows  = data.get("results", [{}])[0].get("tables", [{}])[0].get("rows", [])
+    return rows
+
+
+def fetch_performance_data(token: str, workspace_id: str, dataset_id: str) -> dict:
+    """
+    Hämtar metadata om modellen via DAX TOPN(0,...) discovery.
+    Fungerar för alla modelltyper inkl DirectLake.
+    """
+    result   = {}
+    pbi_base = f"https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}/datasets/{dataset_id}"
+    dax_url  = f"{pbi_base}/executeQueries"
+    headers  = {"Authorization": f"Bearer {token}"}
+    dax_hdrs = {**headers, "Content-Type": "application/json; charset=utf-8"}
+
+    def dax(query):
+        body = {"queries": [{"query": query}], "serializerSettings": {"includeNulls": True}}
+        r = requests.post(dax_url,
+                          data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+                          headers=dax_hdrs, timeout=60)
+        if not r.ok:
+            raise ValueError(f"HTTP {r.status_code}: {r.text[:300]}")
+        return r.json().get("results",[{}])[0].get("tables",[{}])[0].get("rows",[])
+
+    # ── Dataset-info ──────────────────────────────────────────────────────────
+    try:
+        r = requests.get(pbi_base, headers=headers, timeout=15)
+        if r.ok:
+            info         = r.json()
+            storage_mode = info.get("targetStorageMode", "")
+            dataset_mode = info.get("defaultMode", "")
+            display_mode = (
+                "DirectLake" if storage_mode == "PremiumFiles" or "directlake" in dataset_mode.lower()
+                else dataset_mode or storage_mode or "Unknown"
+            )
+            result["dataset_info"] = {
+                "Namn":            info.get("name",""),
+                "Typ":             display_mode,
+                "Konfigurerad av": info.get("configuredBy",""),
+            }
+            result["raw_dataset_api"] = {k: v for k, v in info.items()
+                                          if k in ("name","defaultMode","targetStorageMode","isRefreshable")}
+            result["is_directlake"] = (storage_mode == "PremiumFiles" or
+                                        "directlake" in dataset_mode.lower())
+    except Exception as e:
+        result["dataset_info_error"] = str(e)
+
+    # ── Steg 1: Hitta tabellnamn via COLUMNSTATISTICS() ───────────────────────
+    # COLUMNSTATISTICS() fungerar för Import — returnerar tabeller+kolumner
+    # För DirectLake returnerar den bara beräknade tabeller, men ger oss en startpunkt
+    known_tables = set()
+    columns_list = []
+
+    try:
+        cs_rows = dax("EVALUATE COLUMNSTATISTICS()")
+        for row in cs_rows:
+            tbl = row.get("[Table Name]","")
+            col = row.get("[Column Name]","")
+            if tbl and col and "RowNumber" not in col:
+                known_tables.add(tbl)
+                columns_list.append({
+                    "Tabell": tbl, "Kolumn": col,
+                    "Distinkta värden": int(row.get("[Cardinality]",0) or 0),
+                    "Min": str(row.get("[Min]","") or ""),
+                    "Max": str(row.get("[Max]","") or ""),
+                    "Datatyp": "", "Dold": False,
+                    "Källa": "COLUMNSTATISTICS",
+                })
+        result["source"] = f"COLUMNSTATISTICS — {len(known_tables)} tabeller, {len(columns_list)} kolumner"
+    except Exception as e:
+        result["columnstatistics_error"] = str(e)
+
+    # ── Steg 2: DirectLake — extrahera tabellnamn ur DAX-queries + manuell input ─
+    if result.get("is_directlake"):
+        debug_info = {}
+
+        # Extrahera tabellnamn ur DAX-queries i session (lasttest + Eventhouse-loggar)
+        import re as _re2
+        _TABLE_RE = _re2.compile(r"'([^']+)'\[")
+        extracted_tables = set()
+
+        # Hämta från körda queries i session
+        for r_item in (
+            list(st.session_state.get("results", [])) +
+            [{"query": q.get("sample","")} for q in st.session_state.get("eh_clustered",[])]
+        ):
+            qtext = r_item.get("query","") if isinstance(r_item, dict) else ""
+            for m in _TABLE_RE.finditer(qtext):
+                extracted_tables.add(m.group(1))
+
+        # Slå ihop med redan kända tabeller från COLUMNSTATISTICS
+        all_table_names = set(known_tables) | extracted_tables
+        debug_info["extracted_from_queries"] = sorted(extracted_tables)
+        debug_info["all_tables_to_try"]      = sorted(all_table_names)
+
+        # Kör TOPN(1) per tabell för att få kolumnnamn
+        dl_cols_found = 0
+        topn_results  = {}
+
+        for tbl in sorted(all_table_names):
+            if not tbl:
+                continue
+            try:
+                body = {"queries": [{"query": f"EVALUATE TOPN(1, '{tbl}')"}],
+                        "serializerSettings": {"includeNulls": True}}
+                r2 = requests.post(dax_url,
+                                   data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+                                   headers=dax_hdrs, timeout=15)
+                if r2.ok:
+                    rows = r2.json().get("results",[{}])[0].get("tables",[{}])[0].get("rows",[])
+                    if rows:
+                        col_keys = list(rows[0].keys())
+                        topn_results[tbl] = {"ok": True, "kolumner": len(col_keys)}
+                        for ck in col_keys:
+                            col_name = ck.split("[",1)[1].rstrip("]") if "[" in ck else ck
+                            if "RowNumber" in col_name:
+                                continue
+                            if not any(c["Tabell"] == tbl and c["Kolumn"] == col_name
+                                       for c in columns_list):
+                                columns_list.append({
+                                    "Tabell": tbl, "Kolumn": col_name,
+                                    "Distinkta värden": 0,
+                                    "Min": "", "Max": "", "Datatyp": "", "Dold": False,
+                                    "Källa": "TOPN(1)",
+                                })
+                                dl_cols_found += 1
+                    else:
+                        topn_results[tbl] = {"ok": True, "kolumner": 0, "note": "Tom tabell"}
+                else:
+                    err = r2.json().get("error",{}).get("pbi.error",{}).get("details",[{}])
+                    msg = err[0].get("detail",{}).get("value","") if err else r2.text[:100]
+                    topn_results[tbl] = {"ok": False, "error": msg[:120]}
+            except Exception as e:
+                topn_results[tbl] = {"ok": False, "error": str(e)[:80]}
+
+        debug_info["topn1_results"]  = topn_results
+        debug_info["dl_cols_found"]  = dl_cols_found
+        result["directlake_debug"]   = debug_info
+
+        if dl_cols_found > 0:
+            result["source"] = (result.get("source","") +
+                                f" + TOPN(1) — {dl_cols_found} DirectLake-kolumner")
+
+
+    # ── Relationer ────────────────────────────────────────────────────────────
+    try:
+        r = requests.get(f"{pbi_base}/relationships", headers=headers, timeout=15)
+        if r.ok:
+            result["relationships"] = [
+                {
+                    "Från tabell":  rel.get("fromTable",""),
+                    "Från kolumn":  rel.get("fromColumn",""),
+                    "Till tabell":  rel.get("toTable",""),
+                    "Till kolumn":  rel.get("toColumn",""),
+                    "Riktning":     rel.get("crossFilteringBehavior",""),
+                }
+                for rel in r.json().get("value",[])
+            ]
+    except Exception as e:
+        result["relationships_error"] = str(e)
+
+    return result
+
+
+def fetch_directlake_cardinality(
+    token: str,
+    workspace_id: str,
+    dataset_id: str,
+    table_columns: list[dict],
+) -> dict:
+    """
+    Hämtar kardinalitet för DirectLake-modeller via DAX DISTINCTCOUNT().
+    Kör batchad DAX-query med SUMMARIZECOLUMNS per tabell.
+    Returnerar uppdaterad all_columns-lista.
+    """
+    dax_url = (
+        f"https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}"
+        f"/datasets/{dataset_id}/executeQueries"
+    )
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type":  "application/json; charset=utf-8",
+    }
+
+    # Gruppera kolumner per tabell
+    by_table: dict[str, list[str]] = {}
+    for c in table_columns:
+        tbl = c.get("Tabell", "")
+        col = c.get("Kolumn", "")
+        if tbl and col:
+            by_table.setdefault(tbl, []).append(col)
+
+    cardinality_map: dict[tuple, int] = {}
+
+    for tbl, cols in by_table.items():
+        # Bygg en EVALUATE-query med DISTINCTCOUNT per kolumn
+        # Max 20 kolumner per query för att undvika timeout
+        for batch_start in range(0, len(cols), 20):
+            batch = cols[batch_start:batch_start + 20]
+            measures = ", ".join(
+                f'"DISTINCTCOUNT_{c.replace(" ","_").replace("[","").replace("]","")}", '
+                f'DISTINCTCOUNT(\'{tbl}\'[{c}])'
+                for c in batch
+            )
+            dax = f"EVALUATE ROW({measures})"
+
+            try:
+                body = {"queries": [{"query": dax}], "serializerSettings": {"includeNulls": True}}
+                r = requests.post(
+                    dax_url,
+                    data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+                    headers=headers,
+                    timeout=30,
+                )
+                if not r.ok:
+                    continue
+                rows = r.json().get("results",[{}])[0].get("tables",[{}])[0].get("rows",[])
+                if not rows:
+                    continue
+                row = rows[0]
+                for c in batch:
+                    key_suffix = c.replace(" ","_").replace("[","").replace("]","")
+                    val = next(
+                        (v for k, v in row.items() if key_suffix in k),
+                        None
+                    )
+                    if val is not None:
+                        try:
+                            cardinality_map[(tbl, c)] = int(val)
+                        except Exception:
+                            pass
+            except Exception:
+                continue
+
+    # Uppdatera all_columns med faktisk kardinalitet
+    updated = []
+    for c in table_columns:
+        c = c.copy()
+        key = (c.get("Tabell",""), c.get("Kolumn",""))
+        if key in cardinality_map:
+            c["Distinkta värden"] = cardinality_map[key]
+        updated.append(c)
+
+    return updated
+
+
+def get_dataset_mode(token: str, workspace_id: str, dataset_id: str) -> str:
+    """Returnerar defaultMode för datasetet: DirectLake, Import, DirectQuery etc."""
+    try:
+        r = requests.get(
+            f"https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}/datasets/{dataset_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
+        )
+        if r.ok:
+            return r.json().get("defaultMode", "Unknown")
+    except Exception:
+        pass
+    return "Unknown"
+
+
+def fetch_slow_queries(
+    token: str,
+    cluster_url: str,
+    database: str,
+    workspace_id: str,
+    dataset_id: str,
+    p95_threshold_ms: float = 2000,
+    top_n: int = 10,
+) -> list[dict]:
+    """Hämtar långsamma queries från SemanticModelLogs (p95 > tröskel)."""
+    kusto_token = resolve_kusto_token()
+    resolved_db = resolve_kusto_database(cluster_url, database, kusto_token)
+    ws_clean    = workspace_id.strip().lower()
+    ds_clean    = dataset_id.strip().lower()
+
+    kql = (
+        "SemanticModelLogs\n"
+        "| where OperationName == \"QueryEnd\"\n"
+        "| where tolower(WorkspaceId) == \"" + ws_clean + "\"\n"
+        "| where tolower(ItemId) == \"" + ds_clean + "\"\n"
+        "| where isnotempty(EventText)\n"
+        "| extend CleanQuery = replace_regex(EventText, "
+        "@'VAR _Session[^\\n]*\\n(VAR _ImpersonatedUser[^\\n]*\\n)?(VAR _CorrelationId[^\\n]*\\n)?', '')\n"
+        "| extend CleanQuery = replace_regex(CleanQuery, @'\\s*\\[[A-Za-z]+Time:[^\\]]*\\]\\s*$', '')\n"
+        "| extend CleanQuery = trim(' \\t\\n\\r', CleanQuery)\n"
+        "| where CleanQuery matches regex @'^\\s*(EVALUATE|DEFINE)'\n"
+        "| where CleanQuery !contains \"COLUMNSTATISTICS\"\n"
+        "| summarize\n"
+        "    ExecCount  = count(),\n"
+        "    p50_ms     = percentile(DurationMs, 50),\n"
+        "    p95_ms     = percentile(DurationMs, 95),\n"
+        "    p99_ms     = percentile(DurationMs, 99),\n"
+        "    AvgMs      = round(avg(DurationMs), 0)\n"
+        "  by CleanQuery\n"
+        "| where p95_ms > " + str(p95_threshold_ms) + "\n"
+        "| top " + str(top_n) + " by p95_ms desc\n"
+    )
+
+    url     = f"{cluster_url.rstrip('/')}/v1/rest/query"
+    headers = {
+        "Authorization":           f"Bearer {kusto_token}",
+        "Content-Type":            "application/json; charset=utf-8",
+        "Accept":                  "application/json",
+        "x-ms-client-request-id": str(uuid.uuid4()),
+    }
+    body = {
+        "db":  resolved_db,
+        "csl": kql,
+        "properties": {"Options": {"queryconsistency": "strongconsistency"}},
+    }
+    r = requests.post(
+        url,
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers=headers,
+        timeout=30,
+    )
+    if not r.ok:
+        raise ValueError(f"KQL-fel {r.status_code}: {r.text[:300]}")
+
+    data      = r.json()
+    tables    = data.get("Tables", [])
+    if not tables:
+        return []
+    rows      = tables[0].get("Rows", [])
+    cols      = [c.get("ColumnName", "") for c in tables[0].get("Columns", [])]
+    return [dict(zip(cols, row)) for row in rows]
+
+
+def _analyze_dax_patterns(queries: list[str]) -> list[dict]:
+    """
+    Analyserar DAX-queries efter kända ineffektivitetsmönster.
+    Returnerar lista av fynd: [{query_preview, issue, severity, suggestion}]
+    """
+    findings = []
+
+    patterns = [
+        (
+            r'\bFILTER\s*\(\s*ALL\b',
+            "FILTER(ALL(...))",
+            "hög",
+            "Ersätt FILTER(ALL(T), ...) med CALCULATETABLE(..., ALL(T)) för bättre optimering.",
+        ),
+        (
+            r'\bFILTER\s*\(\s*(?!KEEPFILTERS|VALUES|ALLSELECTED)',
+            "FILTER() på hel tabell",
+            "medel",
+            "Undvik FILTER(Tabell, ...) — använd CALCULATETABLE(Tabell, ...) istället.",
+        ),
+        (
+            r'\bISFILTERED\b|\bHASCROSSFILTERED\b',
+            "ISFILTERED/HASCROSSFILTERED",
+            "medel",
+            "Dessa funktioner kan sakta ner queries i DirectLake/DirectQuery-läge.",
+        ),
+        (
+            r'\bCALCULATE\s*\([^)]+,\s*FILTER\s*\(',
+            "CALCULATE med inbäddad FILTER",
+            "medel",
+            "Flytta filtervillkor direkt till CALCULATE-argumentet istället för FILTER().",
+        ),
+        (
+            r'\bCOUNTROWS\s*\(\s*FILTER\s*\(',
+            "COUNTROWS(FILTER(...))",
+            "hög",
+            "Ersätt med CALCULATE(COUNTROWS(T), filtervillkor) för markant bättre prestanda.",
+        ),
+        (
+            r'\bSUMX\s*\(\s*(?!VALUES|SUMMARIZE)',
+            "SUMX på hel tabell",
+            "hög",
+            "SUMX itererar hela tabellen — lägg till filter eller använd SUM om möjligt.",
+        ),
+        (
+            r'\bCROSSJOIN\b',
+            "CROSSJOIN",
+            "hög",
+            "CROSSJOIN skapar kartesisk produkt — kan bli extremt stor. Överväg SUMMARIZECOLUMNS.",
+        ),
+        (
+            r'\bEARLIER\b',
+            "EARLIER()",
+            "medel",
+            "EARLIER är långsam vid stora tabeller. Ersätt med VAR för bättre prestanda.",
+        ),
+    ]
+
+    import re as _re
+    for q in queries:
+        q_upper = q.upper()
+        preview = q[:120].replace("\n", " ").strip()
+        if len(q) > 120:
+            preview += "..."
+        for pattern, name, severity, suggestion in patterns:
+            if _re.search(pattern, q, _re.IGNORECASE):
+                findings.append({
+                    "query_preview": preview,
+                    "issue":         name,
+                    "severity":      severity,
+                    "suggestion":    suggestion,
+                })
+    return findings
+
+
+
+def get_storage_token() -> str:
+    """Hämtar token med storage.azure.com scope för OneLake-åtkomst."""
+    import subprocess, shutil
+    resource = "https://storage.azure.com/"
+    az_cmd   = shutil.which("az") or shutil.which("az.cmd")
+    args     = [az_cmd or "az", "account", "get-access-token",
+                "--resource", resource, "--query", "accessToken", "-o", "tsv"]
+    result   = subprocess.run(args, capture_output=True, text=True, timeout=15)
+    if result.returncode == 0 and result.stdout.strip():
+        return result.stdout.strip()
+    raise ValueError(
+        f"Kunde inte hämta storage-token via Azure CLI.\n{result.stderr.strip()}\n"
+        "Kontrollera att du är inloggad med 'az login'."
+    )
+
+
+def list_onelake_tables(workspace_id: str, lakehouse_id: str, token: str,
+                        schema: str = "") -> tuple[list[str], str]:
+    """
+    Listar Delta-tabeller via OneLake ADLS Gen2 filesystem API.
+    Hämtar oneLakeTablesPath från lakehouse-info och listar kataloger direkt.
+    """
+    headers     = {"Authorization": f"Bearer {token}"}
+    fabric_base = f"https://api.fabric.microsoft.com/v1/workspaces/{workspace_id}/lakehouses/{lakehouse_id}"
+    storage_token = st.session_state.get("le_storage_token", "")
+
+    # Steg 1: Hämta oneLakeTablesPath från lakehouse-info
+    tables_path = None
+    try:
+        r_info = requests.get(fabric_base, headers=headers, timeout=15)
+        if r_info.ok:
+            props = r_info.json().get("properties", {})
+            tables_path = props.get("oneLakeTablesPath", "")
+    except Exception:
+        pass
+
+    # Steg 2: Lista via OneLake ADLS Gen2 om vi har sökvägen
+    if tables_path and storage_token:
+        list_url = tables_path.rstrip("/") + "?resource=filesystem&recursive=false"
+        storage_headers = {
+            "Authorization": f"Bearer {storage_token}",
+            "x-ms-version":  "2020-10-02",
+        }
+        r_list = requests.get(list_url, headers=storage_headers, timeout=15)
+        if r_list.ok:
+            paths = r_list.json().get("paths", [])
+            dirs  = [
+                p["name"].split("/")[-1]
+                for p in paths
+                if str(p.get("isDirectory","false")).lower() == "true"
+                and not p["name"].endswith("_delta_log")
+            ]
+
+            # Kolla om toppnivån är scheman eller faktiska tabeller
+            # Faktiska Delta-tabeller har en _delta_log-undermapp
+            # Schemakataloger innehåller tabeller som underkataloger
+            # Enkel heuristik: om _delta_log inte finns i någon katalog → det är scheman
+            actual_tables = []
+            schema_dirs   = []
+
+            for d in dirs:
+                # Kolla om det finns _delta_log direkt under denna katalog
+                _check_url = (
+                    tables_path.rstrip("/") + f"/{d}/_delta_log"
+                    "?resource=filesystem&recursive=false"
+                )
+                _cr = requests.get(_check_url, headers=storage_headers, timeout=5)
+                if _cr.ok:
+                    actual_tables.append(d)  # Det är en Delta-tabell
+                else:
+                    schema_dirs.append(d)    # Det är troligen ett schema
+
+            if actual_tables:
+                return sorted(actual_tables), "OneLake ADLS (Tables/)"
+
+            # Ingen tabell på toppnivån — lista ett nivå djupare (scheman)
+            all_tables = []
+            used_schema = "OneLake ADLS"
+            for sd in schema_dirs:
+                sub_url = (
+                    tables_path.rstrip("/") + f"/{sd}"
+                    "?resource=filesystem&recursive=false"
+                )
+                r_sub = requests.get(sub_url, headers=storage_headers, timeout=15)
+                if r_sub.ok:
+                    sub_paths = r_sub.json().get("paths", [])
+                    for sp in sub_paths:
+                        tname = sp["name"].split("/")[-1]
+                        if (str(sp.get("isDirectory","false")).lower() == "true"
+                                and not tname.endswith("_delta_log")):
+                            all_tables.append(f"{sd}/{tname}")
+
+            if all_tables:
+                return sorted(all_tables), "OneLake ADLS (schema/tabell)"
+
+    # Steg 3: Fallback — prova Fabric API med scheman från /schemas
+    fabric_token = st.session_state.get("le_fabric_token", token)
+    fab_headers  = {"Authorization": f"Bearer {fabric_token}"}
+
+    # Hämta scheman
+    schemas_found = []
+    r_s = requests.get(f"{fabric_base}/schemas", headers=fab_headers, timeout=15)
+    if r_s.ok:
+        schemas_found = [s.get("name","") for s in r_s.json().get("value",[]) if s.get("name")]
+
+    if not schemas_found and schema:
+        schemas_found = [schema]
+    if not schemas_found:
+        schemas_found = ["dbo", "semantic_contract", "lh", "default"]
+
+    errors = []
+    for s in schemas_found:
+        r = requests.get(f"{fabric_base}/schemas/{s}/tables", headers=fab_headers, timeout=15)
+        if r.ok:
+            tables = [t.get("name","") for t in r.json().get("value",[]) if t.get("name")]
+            if tables:
+                return sorted(tables), s
+        errors.append(f"  schema='{s}': HTTP {r.status_code}")
+
+    r2 = requests.get(f"{fabric_base}/tables", headers=fab_headers, timeout=15)
+    if r2.ok:
+        tables = [t.get("name","") for t in r2.json().get("value",[]) if t.get("name")]
+        if tables:
+            return sorted(tables), "(ingen schema)"
+
+    errors.append(f"  plain: HTTP {r2.status_code}: {r2.text[:150]}")
+
+    if not storage_token:
+        errors.append(
+            "\n💡 Tips: Hämta storage-token via 🔑 Hämta alla tokens för att "
+            "lista tabeller direkt från OneLake."
+        )
+    raise ValueError("Alla endpoints misslyckades:\n" + "\n".join(errors))
+
+
+def read_delta_stats(workspace_id: str, lakehouse_id: str,
+                     table_name: str, token: str) -> dict:
+    """
+    Läser Delta-tabellstatistik från OneLake via deltalake-biblioteket.
+    Returnerar radantal, schema, kardinalitet per kolumn och null-frekvens.
+    """
+    try:
+        from deltalake import DeltaTable
+        import pyarrow.compute as pc
+    except ImportError:
+        raise ValueError("Kör: pip install deltalake pyarrow")
+
+    table_uri = (
+        f"abfss://{workspace_id}@onelake.dfs.fabric.microsoft.com/"
+        f"{lakehouse_id}/Tables/{table_name}"
+    )
+    storage_options = {
+        "bearer_token":          token,
+        "use_fabric_endpoint":   "true",
+        "account_name":          "onelake",
+    }
+
+    dt     = DeltaTable(table_uri, storage_options=storage_options)
+    schema = dt.schema()
+    ds     = dt.to_pyarrow_dataset()
+    tbl    = ds.to_table()
+
+    total_rows = len(tbl)
+    col_stats  = []
+
+    for field in schema.fields:
+        col_name  = field.name
+        if col_name.startswith("__"):
+            continue
+        try:
+            arr        = tbl.column(col_name)
+            null_count = arr.null_count
+            null_pct   = round(null_count / max(total_rows, 1) * 100, 1)
+            distinct   = len(pc.unique(arr))
+            col_stats.append({
+                "Kolumn":           col_name,
+                "Datatyp":          str(field.type),
+                "Distinkta värden": distinct,
+                "Null-värden":      null_count,
+                "Null %":           null_pct,
+                "Rekommendation":   (
+                    "⚠️ Extrem kardinalitet" if distinct > 1_000_000 else
+                    "⚠️ Hög kardinalitet"    if distinct > 100_000  else
+                    "⚠️ Hög null-frekvens"   if null_pct > 50       else
+                    "✅ OK"
+                ),
+            })
+        except Exception:
+            col_stats.append({
+                "Kolumn": col_name, "Datatyp": str(field.type),
+                "Distinkta värden": "?", "Null-värden": "?", "Null %": "?",
+                "Rekommendation": "⚠️ Kunde inte läsas",
+            })
+
+    return {
+        "table":      table_name,
+        "total_rows": total_rows,
+        "columns":    col_stats,
+        "schema":     [(f.name, str(f.type)) for f in schema.fields],
+    }
+
 
 # ─── Trafikprofiler ───────────────────────────────────────────────────────────
 
@@ -1286,25 +1925,82 @@ def cluster_queries_by_pattern(
     result.sort(key=lambda x: x["total_count"], reverse=True)
     return result
 with st.sidebar:
-    st.markdown("## ⚡ PBI Load Tester")
+    st.markdown("### ⚡ PBI Load Tester")
     st.divider()
 
     st.markdown("### 🔐 Autentisering")
     auth_mode = st.selectbox(
         "Metod",
-        ["Manuell token", "Service Principal"],
+        ["Azure CLI (rekommenderat)", "Manuell token", "Service Principal"],
     )
 
     manual_token = tenant_id = client_id = client_secret = ""
 
-    if auth_mode == "Manuell token":
+    if auth_mode == "Azure CLI (rekommenderat)":
+        st.caption(
+            "Hämtar automatiskt alla nödvändiga tokens via `az account get-access-token`. "
+            "Kräver att Azure CLI är installerat och att du kört `az login`."
+        )
+        if st.button("🔑 Hämta alla tokens", width="stretch", key="fetch_all_tokens"):
+            import subprocess, shutil as _sh
+            _az = _sh.which("az") or _sh.which("az.cmd") or "az"
+            _token_configs = [
+                ("_last_token",       "https://analysis.windows.net/powerbi/api", "Power BI"),
+                ("le_fabric_token",   "https://api.fabric.microsoft.com",         "Fabric REST API"),
+                ("le_storage_token",  "https://storage.azure.com/",               "OneLake Storage"),
+                ("kusto_token_cache", "https://kusto.kusto.windows.net",           "Eventhouse/KQL"),
+            ]
+            _results = []
+            for _key, _resource, _label in _token_configs:
+                try:
+                    _res = subprocess.run(
+                        [_az, "account", "get-access-token",
+                         "--resource", _resource,
+                         "--query", "accessToken", "-o", "tsv"],
+                        capture_output=True, text=True, timeout=15
+                    )
+                    if _res.returncode == 0 and _res.stdout.strip():
+                        _tok = _res.stdout.strip()
+                        if _key == "kusto_token_cache":
+                            st.session_state[_key] = {"tok": _tok, "exp": time.time() + 55*60}
+                        else:
+                            st.session_state[_key] = _tok
+                        _results.append(f"✅ {_label}")
+                    else:
+                        _results.append(f"⚠️ {_label}: {_res.stderr.strip()[:60]}")
+                except Exception as _e:
+                    _results.append(f"❌ {_label}: {str(_e)[:60]}")
+            for _r in _results:
+                st.caption(_r)
+            # Sätt manual_token från det hämtade Power BI-tokenet
+            if st.session_state.get("_last_token"):
+                st.rerun()
+
+        # Visa status för alla tokens
+        _tok_status = [
+            ("Power BI",        "_last_token"),
+            ("Fabric REST API", "le_fabric_token"),
+            ("OneLake Storage", "le_storage_token"),
+            ("Eventhouse/KQL",  "kusto_token_cache"),
+        ]
+        _any_token = False
+        for _lbl, _key in _tok_status:
+            _has = bool(st.session_state.get(_key))
+            if _has:
+                _any_token = True
+            st.caption(f"{'✅' if _has else '⬜'} {_lbl}")
+
+        # Använd Power BI-token som manual_token för resten av appen
+        manual_token = st.session_state.get("_last_token", "")
+
+    elif auth_mode == "Manuell token":
         manual_token = st.text_area(
             "Bearer Token",
             height=90,
             placeholder="eyJ0eXAiOiJKV1Qi...",
             help="az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv",
         )
-        st.caption("Fabric-token täcker både Power BI REST API och Eventhouse/KQL. Giltigt ~60 min.")
+        st.caption("Fabric-token täcker Power BI REST API. Giltigt ~60 min.")
     else:
         tenant_id     = st.text_input("Tenant ID",     placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
         client_id     = st.text_input("Client ID",     placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
@@ -1315,7 +2011,9 @@ with st.sidebar:
 
     # Bygg ett tillfälligt token för att kunna hämta listor
     _preview_token = None
-    if auth_mode == "Manuell token" and manual_token.strip():
+    if auth_mode == "Azure CLI (rekommenderat)":
+        _preview_token = st.session_state.get("_last_token", "") or manual_token.strip() or None
+    elif auth_mode == "Manuell token" and manual_token.strip():
         _preview_token = manual_token.strip()
     elif auth_mode == "Service Principal" and all([tenant_id, client_id, client_secret]):
         try:
@@ -1778,7 +2476,6 @@ with st.sidebar:
 # ─── Huvudvy ──────────────────────────────────────────────────────────────────
 st.markdown("# ⚡ Power BI Semantic Model Load Tester")
 st.caption("Stresstesta DAX-queries mot din semantiska modell och mät svarstider i realtid.")
-st.divider()
 
 _prefill = st.session_state.pop("profile_load", None)
 if _prefill is not None:
@@ -2024,7 +2721,9 @@ if clear_btn:
 if start_btn:
     # Validering
     val_errors = []
-    if auth_mode == "Manuell token" and not manual_token.strip():
+    if auth_mode == "Azure CLI (rekommenderat)" and not st.session_state.get("_last_token",""):
+        val_errors.append("Token saknas — klicka 🔑 Hämta alla tokens i autentiseringssektionen.")
+    elif auth_mode == "Manuell token" and not manual_token.strip():
         val_errors.append("Bearer Token saknas.")
     if auth_mode == "Service Principal" and not all([tenant_id, client_id, client_secret]):
         val_errors.append("Tenant ID, Client ID och Client Secret krävs.")
@@ -2049,6 +2748,11 @@ if start_btn:
             st.stop()
 
     st.success("✅ Token OK")
+
+    # Spara för Performance Advisor
+    st.session_state["_last_token"]        = token
+    st.session_state["_last_workspace_id"] = workspace_id
+    st.session_state["_last_dataset_id"]   = dataset_id
 
     # Initiera rate limiter för denna session
     st.session_state["_rate_limiter"] = RateLimiter(max_per_minute if rate_limit_enabled else 0)
@@ -2234,6 +2938,8 @@ if start_btn:
 
     st.session_state.results   = results_local
     st.session_state.log_lines = log_local
+    st.session_state.running   = False
+    st.rerun()
 
     s = compute_stats(results_local)
     rl = st.session_state.get("_rate_limiter", _rate_limiter)
@@ -2256,6 +2962,383 @@ if st.session_state.results and not start_btn:
             '<div class="log-box">' + "\n".join(st.session_state.log_lines) + "</div>",
             unsafe_allow_html=True,
         )
+
+# ─── Lakehouse Explorer ───────────────────────────────────────────────────────
+st.markdown("""
+<div style="border-top: 3px solid #00d4aa; margin: 2.5rem 0 1.5rem 0;"></div>
+""", unsafe_allow_html=True)
+st.markdown("# 🗄️ Lakehouse Explorer")
+st.caption(
+    "Läser Delta-tabeller direkt från OneLake via `deltalake`-biblioteket. "
+    "Kräver: `pip install deltalake pyarrow`"
+)
+
+with st.expander("⚙️ Anslutning", expanded=not st.session_state.get("le_lakehouse_id","")):
+
+    # Kontrollera deltalake
+    try:
+        import deltalake as _dl
+        st.success(f"✅ deltalake {_dl.__version__}")
+    except ImportError:
+        st.error("❌ pip install deltalake pyarrow")
+
+    st.caption("Välj workspace och lakehouse via dropdowns. Kräver Fabric-token (hämtas automatiskt).")
+
+    # ── Hämta Fabric-token för dropdown-API-anrop ─────────────────────────────
+    _le_ft = st.session_state.get("le_fabric_token","")
+    if _le_ft:
+        st.caption("✅ Fabric-token finns (hämtat via Autentisering)")
+    else:
+        st.warning("⚠️ Hämta tokens via **🔐 Autentisering** → 🔑 Hämta alla tokens")
+
+    # ── Workspace-dropdown ────────────────────────────────────────────────────
+    if _le_ft:
+        @st.cache_data(ttl=120)
+        def _fetch_le_workspaces(token):
+            r = requests.get(
+                "https://api.powerbi.com/v1.0/myorg/groups",
+                headers={"Authorization": f"Bearer {token}"}, timeout=15
+            )
+            if r.ok:
+                items = sorted(r.json().get("value",[]), key=lambda x: x.get("name","").lower())
+                return [(w["id"], w["name"]) for w in items]
+            return []
+
+        _le_ws_options = _fetch_le_workspaces(st.session_state.get("_last_token","") or _le_ft)
+        if _le_ws_options:
+            _le_ws_labels = [f"{name}" for _, name in _le_ws_options]
+            _le_ws_ids    = [wid for wid, _ in _le_ws_options]
+
+            # Sätt default till samma workspace som semantisk modell om möjligt
+            _le_ws_default = 0
+            _cur_ws = st.session_state.get("le_workspace_id","")
+            if _cur_ws and _cur_ws in _le_ws_ids:
+                _le_ws_default = _le_ws_ids.index(_cur_ws)
+
+            _le_ws_sel = st.selectbox(
+                "Workspace", _le_ws_labels,
+                index=_le_ws_default, key="le_ws_dropdown"
+            )
+            _le_sel_ws_id = _le_ws_ids[_le_ws_labels.index(_le_ws_sel)]
+            st.session_state["le_workspace_id"] = _le_sel_ws_id
+            st.caption(f"`{_le_sel_ws_id}`")
+
+            # ── Lakehouse-dropdown ────────────────────────────────────────────
+            @st.cache_data(ttl=120)
+            def _fetch_le_lakehouses(workspace_id, token):
+                # Prova Fabric API för lakehouses
+                r = requests.get(
+                    f"https://api.fabric.microsoft.com/v1/workspaces/{workspace_id}/lakehouses",
+                    headers={"Authorization": f"Bearer {token}"}, timeout=15
+                )
+                if r.ok:
+                    items = r.json().get("value",[])
+                    return sorted([(i["id"], i.get("displayName", i.get("name",""))) for i in items],
+                                   key=lambda x: x[1].lower())
+                # Fallback: /items?type=Lakehouse
+                r2 = requests.get(
+                    f"https://api.fabric.microsoft.com/v1/workspaces/{workspace_id}/items?type=Lakehouse",
+                    headers={"Authorization": f"Bearer {token}"}, timeout=15
+                )
+                if r2.ok:
+                    items = r2.json().get("value",[])
+                    return sorted([(i["id"], i.get("displayName", i.get("name",""))) for i in items],
+                                   key=lambda x: x[1].lower())
+                return []
+
+            _le_lh_options = _fetch_le_lakehouses(_le_sel_ws_id, _le_ft)
+            if _le_lh_options:
+                _le_lh_labels = [name for _, name in _le_lh_options]
+                _le_lh_ids    = [lid for lid, _ in _le_lh_options]
+
+                _le_lh_default = 0
+                _cur_lh = st.session_state.get("le_lakehouse_id","")
+                if _cur_lh and _cur_lh in _le_lh_ids:
+                    _le_lh_default = _le_lh_ids.index(_cur_lh)
+
+                _le_lh_sel = st.selectbox(
+                    "Lakehouse", _le_lh_labels,
+                    index=_le_lh_default, key="le_lh_dropdown"
+                )
+                _le_sel_lh_id = _le_lh_ids[_le_lh_labels.index(_le_lh_sel)]
+                st.session_state["le_lakehouse_id"] = _le_sel_lh_id
+                st.caption(f"`{_le_sel_lh_id}`")
+            else:
+                st.warning("Inga lakehouses hittades i detta workspace.")
+        else:
+            st.warning("Inga workspaces hittades — kontrollera token.")
+
+
+_le_token        = st.session_state.get("le_storage_token", "")
+_le_fabric_token = st.session_state.get("le_fabric_token", "")
+_le_ws           = st.session_state.get("le_workspace_id", "").strip()
+_le_lh           = st.session_state.get("le_lakehouse_id", "").strip()
+_le_ready        = bool(_le_fabric_token and _le_ws and _le_lh)
+
+if not _le_ready:
+    missing = []
+    if not _le_fabric_token: missing.append("Fabric-token (hämta via 🔐 Autentisering)")
+    if not _le_ws:           missing.append("Workspace (välj i ⚙️ Anslutning)")
+    if not _le_lh:           missing.append("Lakehouse (välj i ⚙️ Anslutning)")
+    st.info(f"Saknas: {', '.join(missing)}")
+else:
+    # ── Steg 1: Hämta scheman ─────────────────────────────────────────────────
+    if st.button("🔍 Identifiera scheman och tabeller", width="stretch", key="le_discover_btn"):
+        with st.spinner("Undersöker lakehouse-struktur..."):
+            try:
+                _pbi_token = _le_fabric_token
+                _base_url  = f"https://api.fabric.microsoft.com/v1/workspaces/{_le_ws}/lakehouses/{_le_lh}"
+                _stor_hdrs = {"Authorization": f"Bearer {_le_token}", "x-ms-version": "2020-10-02"}
+                _fab_hdrs  = {"Authorization": f"Bearer {_pbi_token}"}
+
+                # Hämta oneLakeTablesPath
+                _r_info = requests.get(_base_url, headers=_fab_hdrs, timeout=15)
+                _tables_path = ""
+                if _r_info.ok:
+                    _tables_path = _r_info.json().get("properties",{}).get("oneLakeTablesPath","")
+
+                # Lista toppnivån via ADLS
+                _schemas_found = {}  # {schema_name: [table_name, ...]}
+                if _tables_path and _le_token:
+                    _list_url = _tables_path.rstrip("/") + "?resource=filesystem&recursive=false"
+                    _r_top = requests.get(_list_url, headers=_stor_hdrs, timeout=15)
+                    if _r_top.ok:
+                        _top_dirs = [
+                            p["name"].split("/")[-1]
+                            for p in _r_top.json().get("paths",[])
+                            if str(p.get("isDirectory","false")).lower() == "true"
+                            and not p["name"].endswith("_delta_log")
+                        ]
+                        # Kolla om toppnivån är scheman eller tabeller
+                        for _d in _top_dirs:
+                            _delta_url = _tables_path.rstrip("/") + f"/{_d}/_delta_log?resource=filesystem&recursive=false"
+                            _cr = requests.get(_delta_url, headers=_stor_hdrs, timeout=5)
+                            if _cr.ok:
+                                # Det är en tabell — lägg under schema "(root)"
+                                _schemas_found.setdefault("(root)", []).append(_d)
+                            else:
+                                # Det är ett schema — lista dess tabeller
+                                _sub_url = _tables_path.rstrip("/") + f"/{_d}?resource=filesystem&recursive=false"
+                                _r_sub = requests.get(_sub_url, headers=_stor_hdrs, timeout=15)
+                                if _r_sub.ok:
+                                    for _sp in _r_sub.json().get("paths",[]):
+                                        _tname = _sp["name"].split("/")[-1]
+                                        if (str(_sp.get("isDirectory","false")).lower() == "true"
+                                                and not _tname.endswith("_delta_log")):
+                                            _schemas_found.setdefault(_d, []).append(_tname)
+
+                if _schemas_found:
+                    st.session_state["le_schemas_found"] = _schemas_found
+                    _total = sum(len(v) for v in _schemas_found.values())
+                    st.success(f"✅ {len(_schemas_found)} scheman, {_total} tabeller hittade")
+                else:
+                    st.warning("Inga tabeller hittades. Kontrollera att storage-token finns (🔑 Hämta alla tokens).")
+            except Exception as e:
+                st.error(f"❌ {e}")
+
+    # ── Steg 2: Schema-multiselect ────────────────────────────────────────────
+    _schemas_data = st.session_state.get("le_schemas_found", {})
+    if _schemas_data:
+        _all_schema_names = sorted(_schemas_data.keys())
+        _sel_schemas = st.multiselect(
+            "Välj scheman",
+            _all_schema_names,
+            default=_all_schema_names,
+            key="le_sel_schemas",
+        )
+
+        # ── Steg 3: Tabell-multiselect baserat på valda scheman ───────────────
+        _available_tables = []
+        for _s in _sel_schemas:
+            for _t in _schemas_data.get(_s, []):
+                _available_tables.append(f"{_s}/{_t}" if _s != "(root)" else _t)
+        _available_tables = sorted(_available_tables)
+
+        if _available_tables:
+            _sel_tables = st.multiselect(
+                "Välj tabeller att analysera",
+                _available_tables,
+                default=[],
+                key="le_sel_tables",
+                help="Välj en eller flera tabeller. Varje tabell analyseras separat."
+            )
+
+            _sample_only = st.checkbox(
+                "Snabbläge (samplar exakt N rader med dt.head())",
+                value=True, key="le_sample",
+            )
+            _sample_rows = st.number_input(
+                "Antal rader i snabbläge",
+                min_value=1_000, max_value=500_000,
+                value=50_000, step=10_000,
+                key="le_sample_rows",
+                disabled=not st.session_state.get("le_sample", True),
+            ) if st.session_state.get("le_sample", True) else 0
+
+            # ── Steg 4: Analysera ─────────────────────────────────────────────
+            if _sel_tables:
+                _btn_col, _abort_col = st.columns([3, 1])
+                with _btn_col:
+                    _do_analyze = st.button(
+                        f"📊 Analysera {len(_sel_tables)} tabell(er)",
+                        width="stretch", key="le_analyze_btn"
+                    )
+                with _abort_col:
+                    if st.button("⏹ Avbryt", width="stretch", key="le_abort_btn"):
+                        st.session_state["le_abort"] = True
+                        st.rerun()
+
+                if _do_analyze:
+                    if not _le_token:
+                        st.error("Storage-token saknas — klicka 🔑 Hämta alla tokens.")
+                    else:
+                        st.session_state["le_abort"]    = False
+                        st.session_state["le_analyses"] = {}
+                        _all_analyses = {}
+
+                        _tbl_progress  = st.progress(0.0)
+                        _status_text   = st.empty()
+                        _col_progress  = st.empty()
+
+                        from deltalake import DeltaTable
+                        import pyarrow.compute as pc
+                        import pyarrow as pa
+
+                        for _idx, _tbl_full in enumerate(_sel_tables):
+                            if st.session_state.get("le_abort"):
+                                _status_text.warning("⏹ Avbrutet av användaren.")
+                                break
+
+                            _tbl_progress.progress(
+                                _idx / len(_sel_tables),
+                                text=f"Tabell {_idx+1}/{len(_sel_tables)}: {_tbl_full}"
+                            )
+                            _status_text.info(f"⏳ Öppnar {_tbl_full}...")
+
+                            try:
+                                _tbl_path = f"Tables/{_tbl_full}"
+                                _uri = (
+                                    f"abfss://{_le_ws}@onelake.dfs.fabric.microsoft.com/"
+                                    f"{_le_lh}/{_tbl_path}"
+                                )
+                                _opts = {
+                                    "bearer_token":        _le_token,
+                                    "use_fabric_endpoint": "true",
+                                    "account_name":        "onelake",
+                                }
+                                _dt      = DeltaTable(_uri, storage_options=_opts)
+                                _schema  = _dt.schema()
+                                _fields  = [f for f in _schema.fields if not f.name.startswith("__")]
+                                _n_cols  = len(_fields)
+
+                                # Hämta radantal från Delta-logg (gratis — ingen datainläsning)
+                                try:
+                                    _total_rows = _dt.to_pyarrow_dataset().count_rows()
+                                except Exception:
+                                    _total_rows = None
+
+                                # Läs data — dt.head(n) är korrekt sampling
+                                _status_text.info(f"⏳ Läser data från {_tbl_full}...")
+                                if _sample_only and _sample_rows:
+                                    _tbl_pa = _dt.head(_sample_rows)
+                                    _read_rows = len(_tbl_pa)
+                                    _is_sample = True
+                                else:
+                                    _tbl_pa   = _dt.to_pyarrow_dataset().to_table()
+                                    _read_rows = len(_tbl_pa)
+                                    _is_sample = False
+
+                                # Analysera kolumner med progressbar
+                                _stats = []
+                                for _ci, _f in enumerate(_fields):
+                                    if st.session_state.get("le_abort"):
+                                        break
+                                    _col_progress.progress(
+                                        _ci / max(_n_cols, 1),
+                                        text=f"Kolumn {_ci+1}/{_n_cols}: {_f.name}"
+                                    )
+                                    try:
+                                        _arr      = _tbl_pa.column(_f.name)
+                                        _nulls    = _arr.null_count
+                                        _null_pct = round(_nulls / max(_read_rows, 1) * 100, 1)
+                                        _distinct = len(pc.unique(_arr))
+                                        _stats.append({
+                                            "Kolumn":           _f.name,
+                                            "Datatyp":          str(_f.type),
+                                            "Distinkta värden": _distinct,
+                                            "Null-värden":      _nulls,
+                                            "Null %":           _null_pct,
+                                            "Rekommendation":   (
+                                                "⚠️ Extrem kardinalitet" if _distinct > 1_000_000 else
+                                                "⚠️ Hög kardinalitet"    if _distinct > 100_000  else
+                                                "⚠️ Hög null-frekvens"   if _null_pct > 50       else
+                                                "✅ OK"
+                                            ),
+                                        })
+                                    except Exception as _ce:
+                                        _stats.append({
+                                            "Kolumn": _f.name, "Datatyp": str(_f.type),
+                                            "Distinkta värden": "?", "Null-värden": "?",
+                                            "Null %": "?", "Rekommendation": f"⚠️ {_ce}",
+                                        })
+
+                                _all_analyses[_tbl_full] = {
+                                    "total_rows": _total_rows,
+                                    "read_rows":  _read_rows,
+                                    "stats":      _stats,
+                                    "sample":     _is_sample,
+                                    "sample_rows": _sample_rows if _is_sample else None,
+                                }
+                            except Exception as _e:
+                                _all_analyses[_tbl_full] = {"error": str(_e)}
+
+                        _tbl_progress.progress(1.0, text="✅ Klar!")
+                        _status_text.empty()
+                        _col_progress.empty()
+                        st.session_state["le_analyses"] = _all_analyses
+
+                # ── Visa resultat ──────────────────────────────────────────────
+                _analyses = st.session_state.get("le_analyses", {})
+                for _tbl_full, _ana in _analyses.items():
+                    st.markdown(f"### 📊 {_tbl_full}")
+                    if "error" in _ana:
+                        st.error(f"❌ {_ana['error']}")
+                        continue
+
+                    # Radantal-info
+                    _total = _ana.get("total_rows")
+                    _read  = _ana.get("read_rows", 0)
+                    if _ana.get("sample"):
+                        _row_label = f"~{_read:,} (sample av {_total:,})" if _total else f"~{_read:,} (sample)"
+                        _row_help  = f"Analyserat {_read:,} av {_total:,} rader ({round(_read/_total*100,1) if _total else '?'}%)"
+                    else:
+                        _row_label = f"{_read:,}"
+                        _row_help  = "Fullständig analys"
+                    st.metric("Analyserade rader", _row_label, help=_row_help)
+
+                    _df_s = pd.DataFrame(_ana["stats"])
+                    st.dataframe(
+                        _df_s.sort_values("Distinkta värden", ascending=False,
+                                          key=lambda x: pd.to_numeric(x, errors="coerce").fillna(0)),
+                        use_container_width=True, height=min(400, 50 + len(_df_s) * 35)
+                    )
+
+                    _warns = _df_s[_df_s["Rekommendation"] != "✅ OK"]
+                    if not _warns.empty:
+                        for _, _wr in _warns.iterrows():
+                            st.warning(
+                                f"**{_wr['Kolumn']}** (`{_wr['Datatyp']}`): "
+                                f"{_wr['Rekommendation']} — "
+                                f"{_wr['Distinkta värden']} distinkta, {_wr['Null %']}% null"
+                            )
+
+                    st.download_button(
+                        f"⬇ CSV — {_tbl_full}",
+                        _df_s.to_csv(index=False).encode("utf-8"),
+                        f"stats_{_tbl_full.replace('/','_')}.csv",
+                        "text/csv", key=f"le_dl_{_tbl_full.replace('/','_')}"
+                    )
+                    st.divider()
 
 # ─── Footer ───────────────────────────────────────────────────────────────────
 st.divider()
