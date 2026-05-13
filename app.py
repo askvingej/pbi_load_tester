@@ -3170,7 +3170,7 @@ else:
             _sample_rows = st.number_input(
                 "Antal rader i snabbläge",
                 min_value=1_000, max_value=500_000,
-                value=50_000, step=10_000,
+                value=200_000, step=10_000,
                 key="le_sample_rows",
                 disabled=not st.session_state.get("le_sample", True),
             ) if st.session_state.get("le_sample", True) else 0
@@ -3231,8 +3231,72 @@ else:
                                 _fields  = [f for f in _schema.fields if not f.name.startswith("__")]
                                 _n_cols  = len(_fields)
 
-                                # Läs data — limit=n ger korrekt sampling
-                                _status_text.info(f"⏳ Läser data från {_tbl_full}...")
+                                # Hämta Delta-logg metadata (gratis — ingen datainläsning)
+                                _delta_meta = {}
+                                _total_rows = None
+                                try:
+                                    import pyarrow as _pa
+                                    _aa        = _dt.get_add_actions(flatten=True)
+                                    # get_add_actions returnerar ett PyArrow Table
+                                    _aa_cols   = {name: _aa.column(name).to_pylist()
+                                                  for name in _aa.schema.names}
+                                    _num_files = _aa.num_rows
+
+                                    # Hitta size-kolumn
+                                    _size_col = next(
+                                        (k for k in _aa_cols if "size" in k.lower()),
+                                        None
+                                    )
+                                    _total_bytes = sum(
+                                        v for v in (_aa_cols.get(_size_col) or [])
+                                        if isinstance(v, (int, float))
+                                    ) if _size_col else 0
+
+                                    # Hitta records-kolumn
+                                    _rec_col = next(
+                                        (k for k in _aa_cols
+                                         if "record" in k.lower() or "numrow" in k.lower()),
+                                        None
+                                    )
+                                    _total_rows = sum(
+                                        v for v in (_aa_cols.get(_rec_col) or [])
+                                        if isinstance(v, (int, float))
+                                    ) if _rec_col else None
+                                    if _total_rows == 0:
+                                        _total_rows = None
+
+                                    # Kolla partitionering
+                                    _partition_cols = _dt.metadata().partition_columns
+                                    _is_partitioned = bool(_partition_cols)
+
+                                    # Om partitionerad: analysera filer per partition
+                                    _partition_stats = {}
+                                    if _is_partitioned:
+                                        _part_col_data = [
+                                            _aa_cols.get(f"partition.{pc}", [])
+                                            for pc in _partition_cols
+                                        ]
+                                        # Bygg partitionsnyckel → [size] per fil
+                                        for _fi in range(_num_files):
+                                            _pkey = "/".join(
+                                                str(_pc[_fi]) if _fi < len(_pc) else "?"
+                                                for _pc in _part_col_data
+                                            )
+                                            _fsz = (_aa_cols.get(_size_col, [None])[_fi] or 0) if _size_col else 0
+                                            _partition_stats.setdefault(_pkey, []).append(_fsz)
+
+                                    _delta_meta = {
+                                        "num_files":        _num_files,
+                                        "size_mb":          round(_total_bytes / 1_048_576, 1),
+                                        "total_rows":       _total_rows,
+                                        "avg_file_mb":      round(_total_bytes / max(_num_files, 1) / 1_048_576, 2),
+                                        "debug_keys":       list(_aa_cols.keys()),
+                                        "partition_cols":   _partition_cols,
+                                        "is_partitioned":   _is_partitioned,
+                                        "partition_stats":  _partition_stats,
+                                    }
+                                except Exception as _me:
+                                    _delta_meta = {"error": str(_me), "debug_keys": []}
                                 _ds = _dt.to_pyarrow_dataset()
                                 if _sample_only and _sample_rows:
                                     # Hämta radantal först (från Delta-logg, gratis)
@@ -3282,18 +3346,50 @@ else:
                                         _nulls    = _arr.null_count
                                         _null_pct = round(_nulls / max(_read_rows, 1) * 100, 1)
                                         _distinct = len(pc.unique(_arr))
+                                        _card_pct = round(_distinct / max(_total_rows or _read_rows, 1) * 100, 1)
+
+                                        # Uppskatta total kardinalitet baserat på totalt radantal
+                                        _est_total_card = None
+                                        if _is_sample and _total_rows and _total_rows > _read_rows:
+                                            # Linjär extrapolation — underskattar vid hög kardinalitet
+                                            _est_total_card = int(_distinct / max(_read_rows, 1) * _total_rows)
+
+                                        _card_for_warn = _est_total_card or _distinct
+                                        _rec  = "✅ OK"
+                                        _tips = []
+
+                                        if _card_for_warn > 1_000_000:
+                                            _rec = "⚠️ Extrem kardinalitet (>1M unika)"
+                                            _tips = [
+                                                "DISTINCTCOUNT är mycket kostsam — överväg pre-aggregering",
+                                                "MEDIAN/PERCENTILE itererar alla rader — undvik i direkta measures",
+                                                "Undvik som slicer eller filter i rapporter",
+                                                "Överväg att lagra aggregerade värden i en separat tabell",
+                                            ]
+                                        elif _card_for_warn > 700_000:
+                                            _rec = "⚠️ Hög kardinalitet (>700k unika)"
+                                            _tips = [
+                                                "DISTINCTCOUNT kan vara långsam — överväg approximation med APPROXIMATEDISTINCTCOUNT()",
+                                                "MEDIAN/PERCENTILE är kostsamma — cachelagra resultatet med en beräknad kolumn om möjligt",
+                                                "Relationer på denna kolumn kan ge långsamma joins",
+                                            ]
+                                        elif _card_for_warn > 75_000:
+                                            _rec = "ℹ️ Måttlig kardinalitet (>75k unika)"
+                                            _tips = [
+                                                "DISTINCTCOUNT och MEDIAN fungerar men kan märkas vid stora filter",
+                                                "Överväg APPROXIMATEDISTINCTCOUNT() om exakthet inte är kritisk",
+                                            ]
+                                        elif _null_pct > 50:
+                                            _rec = "ℹ️ Hög null-frekvens"
                                         _stats.append({
-                                            "Kolumn":           _f.name,
-                                            "Datatyp":          str(_f.type),
-                                            "Distinkta värden": _distinct,
-                                            "Null-värden":      _nulls,
-                                            "Null %":           _null_pct,
-                                            "Rekommendation":   (
-                                                "⚠️ Extrem kardinalitet" if _distinct > 1_000_000 else
-                                                "⚠️ Hög kardinalitet"    if _distinct > 100_000  else
-                                                "⚠️ Hög null-frekvens"   if _null_pct > 50       else
-                                                "✅ OK"
-                                            ),
+                                            "Kolumn":                  _f.name,
+                                            "Datatyp":                 str(_f.type),
+                                            "Distinkta (sample)":      _distinct,
+                                            "Kardinalitet %":          _card_pct,
+                                            "Est. total kardinalitet": _est_total_card if _est_total_card else _distinct,
+                                            "Null %":                  _null_pct,
+                                            "Rekommendation":          _rec,
+                                            "tips":                    _tips,
                                         })
                                     except Exception as _ce:
                                         _stats.append({
@@ -3303,11 +3399,12 @@ else:
                                         })
 
                                 _all_analyses[_tbl_full] = {
-                                    "total_rows": _total_rows,
-                                    "read_rows":  _read_rows,
-                                    "stats":      _stats,
-                                    "sample":     _is_sample,
+                                    "total_rows":  _delta_meta.get("total_rows") or _total_rows,
+                                    "read_rows":   _read_rows,
+                                    "stats":       _stats,
+                                    "sample":      _is_sample,
                                     "sample_rows": _sample_rows if _is_sample else None,
+                                    "delta_meta":  _delta_meta,
                                 }
                             except Exception as _e:
                                 _all_analyses[_tbl_full] = {"error": str(_e)}
@@ -3328,33 +3425,183 @@ else:
                     # Radantal-info
                     _total = _ana.get("total_rows")
                     _read  = _ana.get("read_rows", 0)
-                    if _ana.get("sample"):
-                        if _total:
-                            _row_label = f"~{_read:,} av {_total:,}"
-                            _row_help  = f"Samplade {_read:,} av {_total:,} rader ({round(_read/_total*100,1)}%)"
-                        else:
-                            _row_label = f"~{_read:,} (sample)"
-                            _row_help  = f"Samplade {_read:,} rader (totalt okänt)"
-                    else:
-                        _row_label = f"{_read:,}"
-                        _row_help  = "Fullständig analys"
-                    st.metric("Analyserade rader", _row_label, help=_row_help)
+                    _dm    = _ana.get("delta_meta", {})
 
+                    # ── Tabellöversikt ────────────────────────────────────────
+                    _mc = st.columns(4)
+                    _total_disp = f"{_total:,}" if _total else "?"
+                    _mc[0].metric("Totalt antal rader",  _total_disp,
+                                  help="Från Delta-loggstatistik")
+                    _mc[1].metric("Storlek",             f"{_dm.get('size_mb','?')} MB")
+                    _mc[2].metric("Antal filer",         f"{_dm.get('num_files','?'):,}" if isinstance(_dm.get('num_files'), int) else "?")
+                    _mc[3].metric("Snittfilstorlek",     f"{_dm.get('avg_file_mb','?')} MB")
+
+                    # ── Sample-info ───────────────────────────────────────────
+                    if _ana.get("sample") and _total:
+                        _coverage = round(_read / _total * 100, 1)
+                        st.caption(
+                            f"📊 Analyserat {_read:,} av {_total:,} rader "
+                            f"(**{_coverage}% täckning**) — "
+                            f"kardinalitet % och estimat baseras på totalt radantal."
+                        )
+                    elif _ana.get("sample"):
+                        st.caption(f"📊 Analyserat {_read:,} rader (totalt okänt)")
+
+                    # ── Fil-rekommendationer ─────────────────────────────────────
+                    _num_files = _dm.get("num_files", 0)
+                    _avg_mb    = _dm.get("avg_file_mb", 0)
+                    _size_mb   = _dm.get("size_mb", 0)
+                    _tot_r     = _dm.get("total_rows", 0) or 0
+                    if _num_files > 0:
+                        _is_partitioned  = _dm.get("is_partitioned", False)
+                        _partition_cols  = _dm.get("partition_cols", [])
+                        _partition_stats = _dm.get("partition_stats", {})
+
+                        # Grundregel: varna bara om tabellen har mer än 100 MB eller 100k rader
+                        _is_significant = _size_mb > 100 or _tot_r > 100_000
+
+                        if not _is_significant:
+                            st.success(
+                                f"✅ Filstruktur OK — {_num_files} fil(er), "
+                                f"{_size_mb} MB totalt (för liten för optimering)"
+                            )
+                        elif _is_partitioned:
+                            # Partitionerad tabell: analysera per partition
+                            _part_label = ", ".join(_partition_cols)
+                            _problem_parts = []
+                            for _pkey, _psizes in _partition_stats.items():
+                                _pn    = len(_psizes)
+                                _pavg  = round(sum(_psizes) / max(_pn, 1) / 1_048_576, 2)
+                                _ptot  = round(sum(_psizes) / 1_048_576, 1)
+                                # Varna per partition om: >1 fil OCH snitt < 10 MB OCH totalt > 10 MB
+                                if _pn > 1 and _pavg < 10 and round(sum(_psizes)/1_048_576,1) > 10:
+                                    _problem_parts.append((_pkey, _pn, _pavg, _ptot))
+
+                            if _problem_parts:
+                                st.warning(
+                                    f"🟡 **Partitionerad tabell** ({_part_label}) — "
+                                    f"{len(_problem_parts)} av {len(_partition_stats)} partitioner "
+                                    f"har många små filer. OPTIMIZE per partition rekommenderas."
+                                )
+                                with st.expander("Visa problematiska partitioner", expanded=False):
+                                    for _pk, _pn, _pavg, _ptot in sorted(
+                                            _problem_parts, key=lambda x: x[1], reverse=True)[:10]:
+                                        st.caption(
+                                            f"Partition `{_pk}`: {_pn} filer, "
+                                            f"snitt {_pavg} MB/fil, {_ptot} MB totalt"
+                                        )
+                            else:
+                                st.success(
+                                    f"✅ Partitionerad tabell OK ({_part_label}) — "
+                                    f"{_num_files} filer i {len(_partition_stats)} partitioner, "
+                                    f"snitt {_avg_mb} MB/fil"
+                                )
+                        else:
+                            # Opartitionerad tabell — varna bara om det är många filer
+                            # 1 fil = alltid OK oavsett storlek
+                            if _num_files <= 1:
+                                st.success(
+                                    f"✅ Filstruktur OK — {_num_files} fil, "
+                                    f"{_size_mb} MB totalt"
+                                )
+                            elif _avg_mb < 1 and _num_files > 20:
+                                st.error(
+                                    f"🔴 **Kritiskt: {_num_files} micro-filer** "
+                                    f"(snitt {_avg_mb} MB, totalt {_size_mb} MB) — "
+                                    f"allvarlig prestandapåverkan. Kör OPTIMIZE omedelbart."
+                                )
+                            elif _avg_mb < 64 and _num_files > 20:
+                                st.warning(
+                                    f"🟡 **OPTIMIZE rekommenderas** — {_num_files} filer, "
+                                    f"snitt {_avg_mb} MB/fil (optimalt ~128 MB), "
+                                    f"totalt {_size_mb} MB."
+                                )
+                            else:
+                                st.success(
+                                    f"✅ Filstruktur OK — {_num_files} filer, "
+                                    f"snitt {_avg_mb} MB/fil ({_size_mb} MB totalt)"
+                                )
+
+
+                    # ── Kolumnstatistik ───────────────────────────────────────
                     _df_s = pd.DataFrame(_ana["stats"])
+
+                    # Visa Delta-tabellstatistik
+                    _dm = _ana.get("delta_meta", {})
+                    if _dm:
+                        _dm_cols = st.columns(4)
+                        _dm_cols[0].metric("Filer", f"{_dm.get('num_files','?'):,}" if isinstance(_dm.get('num_files'), int) else "?")
+                        _dm_cols[1].metric("Storlek", f"{_dm.get('size_mb','?')} MB")
+                        _dm_cols[2].metric("Snittfilstorlek", f"{_dm.get('avg_file_mb','?')} MB")
+                        _dm_cols[3].metric("Rader (Delta-logg)", f"{_dm.get('total_rows',0):,}" if _dm.get('total_rows') else "?")
+
+                    sort_col = "Distinkta (sample)" if "Distinkta (sample)" in _df_s.columns else "Distinkta värden"
                     st.dataframe(
-                        _df_s.sort_values("Distinkta värden", ascending=False,
+                        _df_s.sort_values(sort_col, ascending=False,
                                           key=lambda x: pd.to_numeric(x, errors="coerce").fillna(0)),
                         use_container_width=True, height=min(400, 50 + len(_df_s) * 35)
                     )
 
-                    _warns = _df_s[_df_s["Rekommendation"] != "✅ OK"]
+                    # Debug: visa delta-nycklar om radantal saknas
+                    if _dm and not _dm.get("total_rows") and _dm.get("debug_keys"):
+                        with st.expander("🔧 Debug: Delta-logg nycklar", expanded=False):
+                            st.write(_dm.get("debug_keys",[]))
+                    if _dm.get("error"):
+                        st.warning(f"Delta-metadata fel: {_dm['error']}")
+
+                    # Dela upp efter rekommendationsnivå
+                    _warns = _df_s[_df_s["Rekommendation"].str.startswith("⚠️")]
+                    _infos = _df_s[_df_s["Rekommendation"].str.startswith("ℹ️") &
+                                   ~_df_s["Rekommendation"].str.contains("kardinalitet", case=False)]
+                    _card_infos = _df_s[_df_s["Rekommendation"].str.startswith("ℹ️") &
+                                        _df_s["Rekommendation"].str.contains("kardinalitet", case=False)]
+
                     if not _warns.empty:
+                        st.markdown("**⚠️ Kolumner som kräver uppmärksamhet:**")
                         for _, _wr in _warns.iterrows():
-                            st.warning(
-                                f"**{_wr['Kolumn']}** (`{_wr['Datatyp']}`): "
-                                f"{_wr['Rekommendation']} — "
-                                f"{_wr['Distinkta värden']} distinkta, {_wr['Null %']}% null"
-                            )
+                            _est = _wr.get("Est. total kardinalitet")
+                            _est_str = f" ~{int(_est):,} uppskattade unika" if _est and isinstance(_est, (int, float)) else ""
+                            with st.expander(
+                                f"⚠️ **{_wr['Kolumn']}** — {_wr['Rekommendation']}{_est_str}",
+                                expanded=True
+                            ):
+                                st.caption(
+                                    f"Datatyp: `{_wr['Datatyp']}` · "
+                                    f"Distinkta (sample): {_wr.get('Distinkta (sample)','?'):,} "
+                                    f"({_wr.get('Kardinalitet %','?')}%) · "
+                                    f"Null: {_wr.get('Null %','?')}%"
+                                )
+                                _col_tips = _wr.get("tips", [])
+                                if _col_tips:
+                                    st.markdown("**💡 Prestandatips:**")
+                                    for _tip in _col_tips:
+                                        st.markdown(f"- {_tip}")
+
+                    if not _card_infos.empty:
+                        with st.expander(
+                            f"ℹ️ {len(_card_infos)} kolumn(er) med måttlig kardinalitet (>75k)",
+                            expanded=False
+                        ):
+                            for _, _ir in _card_infos.iterrows():
+                                _est = _ir.get("Est. total kardinalitet")
+                                st.info(
+                                    f"**{_ir['Kolumn']}** (`{_ir['Datatyp']}`): "
+                                    f"~{int(_est):,} uppskattade unika värden" if _est else
+                                    f"**{_ir['Kolumn']}**: {_ir['Rekommendation']}"
+                                )
+                                for _tip in (_ir.get("tips") or []):
+                                    st.caption(f"💡 {_tip}")
+
+                    if not _infos.empty:
+                        with st.expander(
+                            f"ℹ️ {len(_infos)} kolumn(er) med hög null-frekvens",
+                            expanded=False
+                        ):
+                            for _, _ir in _infos.iterrows():
+                                st.caption(
+                                    f"**{_ir['Kolumn']}** (`{_ir['Datatyp']}`): "
+                                    f"{_ir.get('Null %','?')}% null-värden"
+                                )
 
                     st.download_button(
                         f"⬇ CSV — {_tbl_full}",

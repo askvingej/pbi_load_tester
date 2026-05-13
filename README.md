@@ -1,109 +1,234 @@
-# ⚡ Power BI Semantic Model Load Tester
+# ⚡ Power BI Semantic Model Load Tester + 🗄️ Lakehouse Explorer
 
-Stresstesta DAX-queries mot din semantiska modell och mät svarstider i realtid.
+Lokal Python/Streamlit-applikation för att:
+- **Stresstesta DAX-queries** mot Power BI semantiska modeller och mäta svarstider i realtid
+- **Analysera Delta-tabeller** i Fabric Lakehouse — kardinalitet, filstruktur och datakvalitet
 
-## Snabbstart
+---
 
-### 1. Installera beroenden
+## Installation
+
+### Krav
+- Python 3.10 eller senare
+- Azure CLI installerat och inloggat (`az login`)
+- Åtkomst till ett Microsoft Fabric/Power BI-workspace
+
+### 1. Klona eller ladda ner filerna
+
+Placera `app.py`, `requirements.txt` och övriga filer i en mapp, t.ex. `pbi_load_tester/`.
+
+### 2. Installera Python-beroenden
+
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Starta appen
+Beroenden: `streamlit`, `requests`, `pandas`, `plotly`, `deltalake`, `pyarrow`.
+
+### 3. Starta applikationen
+
 ```bash
-streamlit run app.py
+python -m streamlit run app.py
 ```
 
-Appen öppnas automatiskt i din webbläsare på `http://localhost:8501`
+Öppnas automatiskt på http://localhost:8501
 
 ---
 
 ## Autentisering
 
-### Alternativ A — Manuell token (enklast att komma igång)
-Hämta ett token via Azure CLI och klistra in det i appen:
+All autentisering sker i **sidopanelens översta avsnitt (🔐 Autentisering)**.
+
+### Rekommenderat: Azure CLI
+
+Välj **Azure CLI (rekommenderat)** och klicka **🔑 Hämta alla tokens**.
+
+Det hämtar automatiskt fyra tokens på en gång:
+
+| Token             | Används till                          |
+|-------------------|---------------------------------------|
+| Power BI          | DAX-körning via executeQueries API    |
+| Fabric REST API   | Workspace/Lakehouse-listning          |
+| OneLake Storage   | Läsa Delta-tabeller direkt            |
+| Eventhouse/KQL    | Hämta queries från SemanticModelLogs  |
+
+Kräver inloggning: `az login`. Token giltiga i ~60 min.
+
+### Manuell token
+
+Klistra in ett Bearer-token. Hämtas via:
 
 ```bash
-#  ℹ️ Token som täcker både anrop mot semantiska modeller och KQL-databas
-az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv
-
 az account get-access-token --resource https://analysis.windows.net/powerbi/api --query accessToken -o tsv
 ```
 
-Token är giltigt i ~60 minuter.
+### Service Principal
 
-### Alternativ B — Service Principal
-Kräver en Azure AD-appregistrering med Power BI-behörigheter:
-1. Skapa App Registration i Azure Portal
-2. Lägg till `Dataset.ReadWrite.All` (Power BI Service API)
-3. Ge Service Principal-åtkomst till Workspace i Power BI Admin
-4. Fyll i Tenant ID, Client ID och Client Secret i sidopanelen
+Fyll i Tenant ID, Client ID och Client Secret från en Azure App Registration med `Dataset.ReadWrite.All`.
 
 ---
 
-## Hitta Workspace ID och Dataset ID
+## Gränssnittet — översikt
 
-**Från Power BI-tjänstens URL:**
-```
-https://app.powerbi.com/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}
-```
+Applikationen har en **sidopanel** (vänster) och ett **huvudinnehåll** (höger) med två sektioner separerade av en turkos linje.
 
-**Via Power BI REST API:**
-```bash
-# Lista workspaces
-curl -H "Authorization: Bearer $TOKEN" \
-  https://api.powerbi.com/v1.0/myorg/groups
+Sidopanelens ordning:
+1. 🔐 Autentisering
+2. 🎯 Semantisk modell
+3. 👤 Row Level Security
+4. ⚙️ Lastkonfiguration
+5. 📊 Hämta queries från logg
 
-# Lista datasets i ett workspace
-curl -H "Authorization: Bearer $TOKEN" \
-  https://api.powerbi.com/v1.0/myorg/groups/{workspaceId}/datasets
-```
+Huvudinnehållet:
+1. **# ⚡ Power BI Semantic Model Load Tester** — DAX-editor och lasttestning
+2. **# 🗄️ Lakehouse Explorer** — Delta-tabellanalys
 
 ---
 
-## DAX-query-lägen
+## Lasttestaren — steg för steg
 
-### Enkel query
-Samma DAX-query körs för alla iterationer. Bra för att mäta svarstid för en specifik query under last.
+### Steg 1 — Välj semantisk modell
 
-### Flera queries (rotation)
-Separera queries med `---`. De körs i rotation (0, 1, 2, 0, 1, 2...).
-Bra för att simulera realistisk last med blandade queries.
+Under **🎯 Semantisk modell** i sidopanelen:
+1. Välj Workspace i dropdown
+2. Välj Semantisk modell i nästa dropdown
+3. GUID visas som caption
+
+### Steg 2 — Skriv eller ladda DAX
+
+I DAX-editorn:
+- **Enkel query** — en query körs upprepade gånger
+- **Flera queries (rotation)** — separera med `---`
+
+Ladda sparad profil via expandern under editorn, eller importera från loggar via sidopanelen.
+
+### Steg 3 — DAX-parametrar (valfritt)
+
+Platshållarsyntax: `{{paramnamn}}`
 
 ```dax
-EVALUATE ROW("Test", 1)
----
-EVALUATE SUMMARIZECOLUMNS("Count", COUNTROWS('FactTable'))
----
-EVALUATE TOPN(10, 'DimDate', 'DimDate'[Date], DESC)
+-- Text (citattecken ingår redan i DAX-texten):
+TREATAS({"{{fartyg}}"}, 'Fartyg'[Fartygsnamn])
+
+-- Nummer:
+TREATAS({{{ar}}}, 'Trafikdygn'[År])
+
+-- Datum (YYYY-MM-DD):
+'Trafikdygn'[Trafikdygn] >= {{startdatum}}
 ```
 
+Ange värden, välj typ (text/number/date) och läge (Slumpa/Rotation/Fast).
+
+### Steg 4 — Row Level Security (valfritt)
+
+Aktivera **👤 RLS** i sidopanelen:
+- **En användare:** UPN + valfria roller
+- **Flera användare:** en per rad, `upn@domain.se` eller `upn@domain.se | Roll1`
+
+> OBS: RLS kräver användarkonto — fungerar inte med Service Principal.
+
+### Steg 5 — Lastkonfiguration
+
+| Inställning      | Beskrivning                                   |
+|------------------|-----------------------------------------------|
+| Session-etikett  | Identifierar körningen i loggar               |
+| Körläge          | Iterationer (fast antal) eller Tidsbaserat    |
+| Parallella anrop | Antal samtidiga requests (1–50)               |
+| Rate limiting    | Max anrop/min, undviker HTTP 429              |
+| Trafikprofil     | Vågor / Kontorstider / Slumpmässig / Konstant |
+
+### Steg 6 — Kör och tolka resultat
+
+Klicka **▶ Starta**. Realtidslogg och diagram uppdateras under körningen.
+
+Resultatflikar efter körning:
+
+| Flik               | Innehåll                              |
+|--------------------|---------------------------------------|
+| 📈 Svarstider      | Scatter med P50/P95-linjer            |
+| 📊 Histogram       | Fördelning av svarstider              |
+| 📋 Rådata          | Alla anrop med CSV-export             |
+
+Nyckelmetriker: P50, P95, P99, genomsnitt, throughput (q/s), felrate.
+
 ---
 
-## Lastkonfiguration
+## Lakehouse Explorer — steg för steg
 
-| Parameter | Beskrivning |
-|---|---|
-| **Iterationer** | Totalt antal queries att köra |
-| **Parallella anrop** | Hur många queries som skickas samtidigt (concurrency) |
-| **Fördröjning (ms)** | Väntetid innan varje anrop — simulerar realistisk last |
+### Steg 1 — Anslut
+
+I **⚙️ Anslutning**:
+1. Se till att tokens hämtats via 🔐 Autentisering
+2. Välj Workspace i dropdown
+3. Välj Lakehouse i nästa dropdown
+
+### Steg 2 — Identifiera tabeller
+
+Klicka **🔍 Identifiera scheman och tabeller**. Appen navigerar automatiskt rätt oavsett om lakehouset är schema-aktiverat eller inte.
+
+### Steg 3 — Välj och analysera
+
+1. Välj scheman i **multiselect**
+2. Välj tabeller i **multiselect** (uppdateras baserat på schema-val)
+3. Konfigurera snabbläge (default 200 000 rader) eller fullständig analys
+4. Klicka **📊 Analysera**
+
+Klicka **⏹ Avbryt** för att stoppa pågående analys.
+
+### Läsa resultaten
+
+Per tabell:
+
+**4 metrics:** totalt radantal · storlek MB · antal filer · snittfilstorlek
+
+**Filstrukturrekommendation:**
+- ✅ OK — väloptimerad eller för liten för att optimering ska spela roll
+- ℹ️ Kan förbättras — periodisk OPTIMIZE hjälper
+- 🟡 OPTIMIZE rekommenderas — många små filer i stor tabell
+- 🔴 Kritiskt — micro-filer, kör OPTIMIZE + VACUUM omedelbart
+
+Partitionerade tabeller analyseras per partition — en fil per partition är alltid OK.
+
+**Kolumnstatistik** sorterad på kardinalitet:
+
+| Kardinalitet         | Rekommendation                                                 |
+|----------------------|----------------------------------------------------------------|
+| > 1 000 000 unika    | ⚠️ Extrem — undvik DISTINCTCOUNT, MEDIAN, relationer          |
+| > 700 000 unika      | ⚠️ Hög — överväg APPROXIMATEDISTINCTCOUNT()                   |
+| > 75 000 unika       | ℹ️ Måttlig — DISTINCTCOUNT och MEDIAN fungerar men märks      |
+| Hög null-frekvens    | ℹ️ Datakvalitetsinformation                                    |
+
+Täckningsprocent visas för snabbläge — låg täckning ger osäkrare estimat.
 
 ---
 
-## Resultat och export
+## Hämta queries från loggar
 
-- **P50/P95/P99** — percentiler för svarstider
-- **Throughput** — queries per sekund
-- **Felrate** — andel misslyckade anrop
-- **Realtidsdiagram** — svarstider över tid med percentilreferenslinjer
-- **Histogram** — fördelning av svarstider
-- **CSV-export** — ladda ner rådata för vidare analys
+Konfigurera under **📊 Hämta queries från logg** i sidopanelen:
+1. Ange Eventhouse Cluster-URL: `https://xxxx.kusto.fabric.microsoft.com`
+2. Ange databas
+3. Klicka **🔍 Hämta och analysera**
+
+Appen importerar verkliga queries, grupperar liknande, och identifierar TREATAS/IN-parametrar automatiskt.
 
 ---
 
-## Tips
+## Kända begränsningar
 
-- Börja med lågt concurrency (1-3) och öka gradvis
-- Använd `EVALUATE ROW("Ping", 1)` som baseline-query
-- Hög P99 relativt P95 indikerar sporadiska långsamma queries (cache-missar, cold start)
-- Jämför resultat med och utan `ALLSELECTED`/`ALLEXCEPT` för att isolera DAX-overhead
+- Rate limit: ~120 anrop/min för Premium/Fabric
+- Token löper ut efter ~60 min — klicka 🔑 igen
+- RLS fungerar inte med Service Principal
+- DirectLake stöder inte `INFO.TABLES()` eller `COLUMNSTATISTICS()` via executeQueries
+- Kardinalitetsestimat vid < 10% täckning kan vara missvisande
+
+---
+
+## Felsökning
+
+| Problem                         | Lösning                                                  |
+|---------------------------------|----------------------------------------------------------|
+| `401 Unauthorized` Fabric API   | Hämta alla tokens — Power BI-token räcker inte           |
+| `400 UnsupportedOperation`      | Schema-aktiverat lakehouse — hanteras automatiskt        |
+| Tom workspace-dropdown          | Kontrollera att Power BI-token hämtats                   |
+| `deltalake` saknas              | `pip install deltalake pyarrow`                          |
+| `az: command not found`         | https://aka.ms/installazurecliwindows                    |
