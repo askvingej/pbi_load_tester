@@ -3231,20 +3231,40 @@ else:
                                 _fields  = [f for f in _schema.fields if not f.name.startswith("__")]
                                 _n_cols  = len(_fields)
 
-                                # Hämta radantal från Delta-logg (gratis — ingen datainläsning)
-                                try:
-                                    _total_rows = _dt.to_pyarrow_dataset().count_rows()
-                                except Exception:
-                                    _total_rows = None
-
-                                # Läs data — dt.head(n) är korrekt sampling
+                                # Läs data — limit=n ger korrekt sampling
                                 _status_text.info(f"⏳ Läser data från {_tbl_full}...")
+                                _ds = _dt.to_pyarrow_dataset()
                                 if _sample_only and _sample_rows:
-                                    _tbl_pa = _dt.head(_sample_rows)
+                                    # Hämta radantal först (från Delta-logg, gratis)
+                                    try:
+                                        _total_rows = sum(
+                                            f.num_rows for f in _ds.get_fragments()
+                                            if hasattr(f, 'num_rows') and f.num_rows
+                                        ) or None
+                                    except Exception:
+                                        _total_rows = None
+                                    # Läs första N rader via scanner
+                                    import pyarrow as pa
+                                    _scanner = _ds.scanner(batch_size=_sample_rows)
+                                    _batches = []
+                                    _rows_read = 0
+                                    for _batch in _scanner.to_batches():
+                                        _batches.append(_batch)
+                                        _rows_read += len(_batch)
+                                        if _rows_read >= _sample_rows:
+                                            break
+                                    _tbl_pa   = pa.Table.from_batches(_batches).slice(0, _sample_rows)
                                     _read_rows = len(_tbl_pa)
                                     _is_sample = True
                                 else:
-                                    _tbl_pa   = _dt.to_pyarrow_dataset().to_table()
+                                    try:
+                                        _total_rows = sum(
+                                            f.num_rows for f in _ds.get_fragments()
+                                            if hasattr(f, 'num_rows') and f.num_rows
+                                        ) or None
+                                    except Exception:
+                                        _total_rows = None
+                                    _tbl_pa    = _ds.to_table()
                                     _read_rows = len(_tbl_pa)
                                     _is_sample = False
 
@@ -3309,8 +3329,12 @@ else:
                     _total = _ana.get("total_rows")
                     _read  = _ana.get("read_rows", 0)
                     if _ana.get("sample"):
-                        _row_label = f"~{_read:,} (sample av {_total:,})" if _total else f"~{_read:,} (sample)"
-                        _row_help  = f"Analyserat {_read:,} av {_total:,} rader ({round(_read/_total*100,1) if _total else '?'}%)"
+                        if _total:
+                            _row_label = f"~{_read:,} av {_total:,}"
+                            _row_help  = f"Samplade {_read:,} av {_total:,} rader ({round(_read/_total*100,1)}%)"
+                        else:
+                            _row_label = f"~{_read:,} (sample)"
+                            _row_help  = f"Samplade {_read:,} rader (totalt okänt)"
                     else:
                         _row_label = f"{_read:,}"
                         _row_help  = "Fullständig analys"
