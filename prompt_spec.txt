@@ -1,450 +1,278 @@
 ================================================================================
 SPEC: Power BI Semantic Model Load Tester + Lakehouse Explorer
+Version: 3.0
 ================================================================================
 
-Bygg en lokal webbapplikation i Python + Streamlit som kombinerar två verktyg:
-1. Lasttestar för Power BI semantiska modeller (DAX via executeQueries REST API)
-2. Lakehouse Explorer för att analysera Fabric Delta-tabeller direkt via OneLake
+Bygg en lokal Python/Streamlit-applikation:
+1. Lasttestare för Power BI semantiska modeller (DAX via executeQueries)
+2. Query-analysator mot Fabric SemanticModelLogs (KQL via Eventhouse)
+3. Lakehouse Explorer för Fabric Delta-tabeller (direkt via OneLake/deltalake)
 
-Starta med: python -m streamlit run app.py
-Kör lokalt mot Microsoft Fabric/Power BI via Azure CLI-autentisering.
-Allt i en fil: app.py. Profiler sparas i dax_library.json.
-
-requirements.txt:
-  streamlit>=1.32.0
-  requests>=2.31.0
-  pandas>=2.0.0
-  plotly>=5.18.0
-  deltalake>=0.17.0
-  pyarrow>=14.0.0
+Start: python -m streamlit run app.py. Allt i app.py. Profiler i dax_library.json.
+requirements: streamlit>=1.32, requests>=2.31, pandas>=2.0, plotly>=5.18,
+              deltalake>=0.17, pyarrow>=14.0
 
 ────────────────────────────────────────────────────────────────────────────────
 DESIGN
 ────────────────────────────────────────────────────────────────────────────────
 
-Mörkt tema, CSS injiceras via st.markdown(unsafe_allow_html=True):
-  Bakgrund:        #0d1117
-  Paneler:         #161b22
-  Borders:         #21262d
-  Accent/framgång: #00d4aa  (turkos)
-  Varning/P95:     #f0b429
-  Fel/P99:         #ef4444
-  Muted text:      #8b949e
-
-Typsnitt: IBM Plex Mono (Google Fonts) för metriker och kodnära element.
-Knappar: width="stretch" (INTE use_container_width=True).
-st.plotly_chart och st.dataframe: use_container_width=True.
-
-De två huvudsektionerna separeras av:
-  st.markdown('<div style="border-top: 3px solid #00d4aa; margin: 2.5rem 0 1.5rem 0;"></div>',
-              unsafe_allow_html=True)
+Mörkt tema: #0d1117 bakgrund, #161b22 paneler, #21262d borders,
+            #00d4aa accent, #f0b429 varning, #ef4444 fel, #8b949e muted.
+IBM Plex Mono (Google Fonts). Knappar: width="stretch".
+Diagram/tabeller: use_container_width=True.
+st.metric: label 11px, value 18px via CSS (data-testid="stMetric").
+Sektionsseparator: <div style="border-top:3px solid #00d4aa;margin:2.5rem 0 1.5rem 0">
 
 ────────────────────────────────────────────────────────────────────────────────
-AUTENTISERING (sidopanel, överst)
+AUTENTISERING
 ────────────────────────────────────────────────────────────────────────────────
 
-Rubrik: ### ⚡ PBI Load Tester (sidopanel-titel)
-Sedan: ### 🔐 Autentisering
+selectbox: ["Azure CLI (rekommenderat)", "Manuell token", "Service Principal"]
 
-selectbox auth_mode: ["Azure CLI (rekommenderat)", "Manuell token", "Service Principal"]
+Azure CLI — "🔑 Hämta alla tokens" via subprocess:
+  session_state["_last_token"]      = analysis.windows.net/powerbi/api
+  session_state["le_fabric_token"]  = api.fabric.microsoft.com
+  session_state["le_storage_token"] = storage.azure.com/
+  session_state["kusto_token_cache"]= kusto.kusto.windows.net
+  Visa ✅/⬜ per token. st.rerun() efter hämtning.
 
-Azure CLI-läget:
-  En knapp: 🔑 Hämta alla tokens
-  Hämtar fyra tokens via subprocess az account get-access-token:
-    "_last_token"      -> https://analysis.windows.net/powerbi/api  (Power BI)
-    "le_fabric_token"  -> https://api.fabric.microsoft.com           (Fabric REST)
-    "le_storage_token" -> https://storage.azure.com/                 (OneLake/ADLS)
-    "kusto_token_cache"-> https://kusto.kusto.windows.net            (Eventhouse/KQL)
-  Visa ✅/⬜ status per token efter hämtning.
-  st.rerun() efter lyckad hämtning.
-
-Manuell token:
-  text_area för Bearer Token.
-
-Service Principal:
-  text_input Tenant ID, Client ID, Client Secret (password).
-  POST https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token
-  Token cachas i session_state["token_cache"] med 55 min TTL.
-
-resolve_token(auth_mode, tenant_id, client_id, client_secret, manual_token) -> str:
-  Azure CLI: returnera session_state["_last_token"]
-  Manuell: returnera manual_token.strip()
-  SP: hämta/returnera cachad token
+resolve_token(): Azure CLI → _last_token | Manuell → strip() | SP → cacha 55 min
 
 ────────────────────────────────────────────────────────────────────────────────
-SEMANTISK MODELL (sidopanel)
+SIDOPANEL (uppifrån)
 ────────────────────────────────────────────────────────────────────────────────
 
-### 🎯 Semantisk modell
-
-_preview_token sätts från session_state["_last_token"] för Azure CLI-läget.
-
-Workspace-dropdown via @st.cache_data(ttl=120):
-  GET https://api.powerbi.com/v1.0/myorg/groups
-  Sorterat alfabetiskt. Visa workspace_id som caption.
-
-Dataset-dropdown via @st.cache_data(ttl=120):
-  GET https://api.powerbi.com/v1.0/myorg/groups/{ws}/datasets
-  Visa "Namn (defaultMode)". Visa dataset_id som caption.
-
-Fallback: manuella text_input för Workspace ID och Dataset ID.
-
-DirectLake-detektering via targetStorageMode == "PremiumFiles":
-  GET https://api.powerbi.com/v1.0/myorg/groups/{ws}/datasets/{id}
+### ⚡ PBI Load Tester → 🔐 Autentisering → 🎯 Semantisk modell →
+👤 RLS → ⚙️ Lastkonfiguration → 📊 Hämta queries från logg (längst ner)
 
 ────────────────────────────────────────────────────────────────────────────────
-SIDOPANELENS ORDNING
+H�MTA QUERIES FRÅN LOGG
 ────────────────────────────────────────────────────────────────────────────────
 
-1. ### ⚡ PBI Load Tester
-2. ### 🔐 Autentisering
-3. ### 🎯 Semantisk modell
-4. ### 👤 Row Level Security (RLS)
-5. ### ⚙️ Lastkonfiguration
-6. ### 📊 Hämta queries från logg  (längst ner)
+fetch_top_queries_from_logs(token, cluster_url, database, workspace_id,
+    dataset_id, top_n, min_count, sort_mode, exclude_session_prefix,
+    date_from, date_to) -> (list[dict], kql_str)
 
-────────────────────────────────────────────────────────────────────────────────
-ROW LEVEL SECURITY (sidopanel)
-────────────────────────────────────────────────────────────────────────────────
+  sort_mode → KQL-sortering:
+    "Vanligast körda"       → Count desc
+    "Längst duration (p95)" → P95Ms desc
+    "Längst duration (avg)" → AvgMs desc
+    "Högst CPU-tid"         → AvgCpuMs desc
+    "Senast körda"          → LastSeen desc
 
-st.toggle key="rls_toggle"
-st.radio key="rls_mode_radio": ["En användare", "Flera användare (rotation)"]
+  KQL summarize: Count, AvgMs, P95Ms, AvgCpuMs (om tillgänglig),
+    LastSeen=max(), LastUser=take_any(ExecutingUser)
 
-En användare: text_input UPN + text_input roller (kommaseparerade)
-Flera: text_area, en per rad, format: upn@domain.se | Roll1, Roll2
+  Datumfilter:
+    | where TimeGenerated >= datetime({date_from})
+    | where TimeGenerated < datetime({date_to}) + 1d
 
-effectiveIdentity skickas alltid i request body:
-  body["impersonatedUserName"] = username (om RLS aktivt)
-  body["effectiveIdentity"] = [{"username":..., "datasets":[{"id":dataset_id}],
-                                "customData":username, "roles":[...]}]
+  Session-filter: | where not(CleanQuery matches regex @'VAR _Session\s*=\s*"{prefix}')
+  Blockera: COLUMNSTATISTICS, COLUMNTRAITS, SYSTEMRESTRICTSCHEMA, $SYSTEM, __XL_
+  Rensa: tracking-VARs, [WaitTime: X ms]
 
-────────────────────────────────────────────────────────────────────────────────
-LASTKONFIGURATION (sidopanel)
-────────────────────────────────────────────────────────────────────────────────
+  Records: {query, count, avg_ms, p95_ms, cpu_ms, last_user, last_seen}
 
-Session-etikett: text_input, default datetime.now().strftime("test-%Y%m%d")
+cluster_queries_by_pattern(): propagerar p95_ms, avg_cpu_ms, last_user, last_seen.
 
-Rate limiting (expander):
-  toggle + slider max_per_minute (10-200, default 60)
-  Klass RateLimiter(token bucket, threading.Lock). DEKLARERA UTAN typannotering.
-  Lagra i session_state["_rate_limiter"]. Använd INTE global.
+describe_dax_query(dax) -> str:
+  LOKAL regex-analys — INGA externa API-anrop.
+  import re as _re_local  INUTI funktionen (inte modulnivå _re_dax)
+  Identifierar: tabeller ('T'[C]-mönster), aggregeringar (SUMMARIZECOLUMNS etc.),
+  mått (kolumnnamn i resultat), filter (TREATAS/IN/datum),
+  tidsintelligens, fönsterfunktioner, komplexitet (VARs, EVALUATE-count)
 
-st.radio "Körläge": ["Iterationer", "Tidsbaserat"]
-
-Iterationer: number_input Iterationer (1-5000, default 20),
-             Parallella anrop (1-50, default 3), Fast fördröjning ms (0-10000)
-
-Tidsbaserat: körtid + enhet (sekunder/minuter/timmar), Max parallella (1-50),
-             Trafikprofil: ["Vågor", "Kontorstider", "Slumpmässig", "Konstant"]
-
-next_delay_seconds(profile, elapsed, duration_sec) -> float:
-  Vågor:       math.sin(elapsed * 2π / 30) > 0.3 ? uniform(0.05,0.3) : uniform(2,6)
-  Kontorstider: intensity baserat på progress, return max(0.05, 2.0 - intensity*1.8)
-  Slumpmässig: random.choice([uniform(0.05,0.3), uniform(0.5,2), uniform(3,8)])
-  Konstant:    0.05
-
-────────────────────────────────────────────────────────────────────────────────
-H�MTA QUERIES FRÅN LOGG (sidopanel, längst ner)
-────────────────────────────────────────────────────────────────────────────────
-
-### 📊 Hämta queries från logg
-
-Konfiguration sparas per workspace i dax_library.json["__ws_config__{ws_id}"].
-Kusto-token hämtas via Azure CLI med resource https://kusto.kusto.windows.net
-
-KQL mot SemanticModelLogs:
-  - Filtrera på WorkspaceId + ItemId
-  - Rensa tracking-VARs och [WaitTime: X ms]-suffix
-  - Blockera COLUMNSTATISTICS, COLUMNTRAITS, SYSTEMRESTRICTSCHEMA, $SYSTEM, __XL_
-  - Gruppera strukturellt liknande queries med cluster_queries_by_pattern()
-
-Mönsterigenkänning extract_treatas_params(dax) -> (template, params):
-  Hittar TREATAS({val1,val2}, 'Tabell'[Kolumn]) och
-       'Tabell'[Kolumn] IN {"val1", "val2"}
-  Ersätter värdelistor med {{paramnamn}}-platshållare
-  Returnerar (template_dax, params_list)
-
-Laddning via profile_load-mönstret (rls: None bevarar befintlig RLS):
-  session_state["profile_load"] = {"dax": ..., "mode": ..., "params": ..., "rls": None}
-  st.rerun()
-
-────────────────────────────────────────────────────────────────────────────────
-DAX-EDITOR (huvudvy)
-────────────────────────────────────────────────────────────────────────────────
-
-# ⚡ Power BI Semantic Model Load Tester
-
-profile_load POPpas och session_state skrivs INNAN widgets renderas:
-  _prefill = st.session_state.pop("profile_load", None)
-  if _prefill:
-    st.session_state["query_mode_radio"] = _prefill.get("mode", "Enkel query")
-    st.session_state["dax_single_input"] = _prefill.get("dax", 'EVALUATE ROW("Ping", 1)')
-    st.session_state["dax_multi_input"]  = _prefill.get("dax", 'EVALUATE ROW("Ping", 1)')
-    st.session_state["dax_params"]       = _prefill.get("params", [])
-    if _prefill.get("rls") is not None:
-      session_state["rls_prefill"] = _prefill["rls"]
-
-st.radio key="query_mode_radio": ["Enkel query", "Flera queries (rotation)"]
-Enkel: text_area key="dax_single_input", height=130
-Flera: text_area key="dax_multi_input", height=160, separera med ---
-
-────────────────────────────────────────────────────────────────────────────────
-DAX-PARAMETRAR
-────────────────────────────────────────────────────────────────────────────────
-
-Platshållar-syntax: {{paramnamn}}
-  Text:  TREATAS({"{{fartyg}}"}, 'Fartyg'[Fartygsnamn])  -> citattecken i DAX-texten
-  Siff:  TREATAS({{{ar}}}, 'Trafikdygn'[År])
-  Datum: 'Trafikdygn'[Trafikdygn] >= {{startdatum}}  -> DATE(yyyy,mm,dd)
-
-apply_dax_params(dax, params, iteration) -> str:
-  Ersätter {{param}} RAKT AV. Lägger INTE till citattecken.
-  Normalisera: unicodedata.normalize("NFC", val).strip()
-  Ta bort kontrolltecken. Ersätt typografiska citattecken.
-  Auto-detektera typ: om nummer-param-värde inte är rent tal -> behandla som text.
-
-format_value(val, typ):
-  number: om värdet matchar ^-?\d+(\.\d+)$ -> returnera rakt, annars citera som text
-  text:   f'"{val.replace('"', '""')}"'
-  date:   DATE(yyyy, mm, dd)
-
-────────────────────────────────────────────────────────────────────────────────
-DAX VAR-INJEKTION
-────────────────────────────────────────────────────────────────────────────────
-
-I run_dax() efter apply_dax_params:
-  tracking_vars = "VAR _Session = \"...\"\nVAR _ImpersonatedUser = \"...\"\nVAR _CorrelationId = \"...\"\n"
-
-  EVALUATE-query: EVALUATE\n{tracking_vars}RETURN\n{kropp}
-  DEFINE-query:   injicera tracking_vars direkt efter DEFINE
-
-────────────────────────────────────────────────────────────────────────────────
-API-ANROP run_dax()
-────────────────────────────────────────────────────────────────────────────────
-
-POST https://api.powerbi.com/v1.0/myorg/groups/{ws}/datasets/{ds}/executeQueries
-Headers: Authorization, Content-Type: application/json; charset=utf-8, X-PowerBI-CorrelationId
-
-KRITISKT - svenska tecken:
-  json.dumps(body, ensure_ascii=False).encode("utf-8") + data= (INTE json=)
-
-HTTP 429: max 3 retry, exponential backoff, respektera Retry-After.
-Returnerar: (duration_ms, rows, error, correlation_id)
-
-────────────────────────────────────────────────────────────────────────────────
-PROFILER
-────────────────────────────────────────────────────────────────────────────────
-
-Sparas i dax_library.json under nyckel "workspace_id::dataset_id".
-JSON per profil: {dax, mode, params: [{name,mode,values,type}], rls}
-Laddning: skriv till session_state + st.rerun()
-
-────────────────────────────────────────────────────────────────────────────────
-KÖRMOTOR
-────────────────────────────────────────────────────────────────────────────────
-
-ThreadPoolExecutor för parallellism. Synkront i Streamlits huvud-tråd.
-  dax = apply_dax_params(queries[i % n], params, i)
-  fut = pool.submit(run_dax, token, ws, ds, dax, identity, session_tag)
-
-i_counter = [0]  (lista — INTE global/nonlocal)
-
-Live-UI: 4 st.empty() — progressbar, status, logg (40 rader), diagram (var 5:e anrop)
-st.rerun() efter körning för att visa permanenta resultat.
-
-st.session_state.results = results_local
-st.session_state.running = False
-st.rerun()
-
-Loggformat:
-  [HH:MM:SS.mmm]  ✓ #001  243 ms  [anna@sl.se]  —  847 rader
-  [HH:MM:SS.mmm]  ✗ #002  1613 ms  [anna@sl.se]  —  HTTP 400: ...
-
-────────────────────────────────────────────────────────────────────────────────
-RESULTAT
-────────────────────────────────────────────────────────────────────────────────
-
-P50/P95/P99, throughput, felrate — 6 metric cards
-3 flikar: 📈 Svarstider över tid · 📊 Histogram · 📋 Rådata (CSV-export)
+UI: Rensa eh_desc_*-nycklar vid ny hämtning.
+    Varaktigheter i sekunder med 1 decimal (ms/1000).
+    Varje mönster: körningar · avg sek · p95 sek · senast kördes av user/tid
 
 ────────────────────────────────────────────────────────────────────────────────
 LAKEHOUSE EXPLORER
 ────────────────────────────────────────────────────────────────────────────────
 
-# 🗄️ Lakehouse Explorer (separeras från lasttestaren med 3px #00d4aa-linje)
+Separeras från lasttestaren med 3px #00d4aa-linje.
 
-ANSLUTNING (expander):
-  Workspace-dropdown: GET https://api.powerbi.com/v1.0/myorg/groups (Power BI-token)
-  Lakehouse-dropdown via @st.cache_data(ttl=120):
-    GET https://api.fabric.microsoft.com/v1/workspaces/{ws}/lakehouses  (Fabric-token)
-    Fallback: /items?type=Lakehouse
+ANSLUTNING:
+  Workspace: GET /v1.0/myorg/groups (Power BI-token)
+  Lakehouse: GET api.fabric.microsoft.com/v1/workspaces/{ws}/lakehouses (Fabric-token)
 
-TABELLUPPTÄCKT (knapp: 🔍 Identifiera scheman och tabeller):
-  1. Hämta oneLakeTablesPath från GET /lakehouses/{id}
-  2. Lista toppnivå via ADLS Gen2: {tables_path}?resource=filesystem&recursive=false
-     (storage_token med audience https://storage.azure.com/)
-  3. Kolla om katalog är Delta-tabell (har _delta_log) eller schema (har underkatalog-tabeller)
-  4. Lista ett nivå djupare för schemakataloger
-  5. Returnera {schema_name: [table_name, ...]}
+TABELLUPPTÄCKT (🔍):
+  1. GET /lakehouses/{id} → properties.oneLakeTablesPath
+  2. ADLS Gen2 list: {path}?resource=filesystem&recursive=false (storage-token)
+  3. Kolla _delta_log → Delta-tabell eller schema-katalog
+  4. Lista ett nivå djupare för scheman
+  5. Returnera {schema: [table, ...]}
 
-KASKAD-DROPDOWNS efter upptäckt:
-  multiselect scheman -> multiselect tabeller (format: "schema/tabellnamn")
+ANALYS (📊 Analysera + ⏹ Avbryt via session_state["le_abort"]):
 
-ANALYS (knapp: 📊 Analysera X tabell(er)):
-  Konfiguration: Snabbläge (default 200 000 rader) eller fullständig
-  Avbryt-knapp: session_state["le_abort"] = True, kontrolleras per kolumn
+  DeltaTable URI: abfss://{ws}@onelake.dfs.fabric.microsoft.com/{lh}/Tables/{schema}/{tbl}
+  storage_options: {bearer_token, use_fabric_endpoint:"true", account_name:"onelake"}
 
-  Per tabell:
-    1. DeltaTable(uri, storage_options={bearer_token, use_fabric_endpoint:true, account_name:onelake})
-       URI: abfss://{workspace_id}@onelake.dfs.fabric.microsoft.com/{lakehouse_id}/Tables/{schema}/{table}
+  ── Steg 1: Delta-logg metadata (NOLL datainläsning) ─────────────────────────
+  get_add_actions(flatten=False) → PyArrow Table med nested structs:
+    - null_count.{col} per fil → summera → exakt null_count för hela tabellen
+    - min_values.{col} / max_values.{col} → global min/max
+  INTE flatten=True (ger inte nested stats). INTE to_pydict() — använd .column().
 
-    2. Delta-metadata via get_add_actions(flatten=True) -> PyArrow Table:
-       Hitta size-kolumn (nyckel med "size" i namnet)
-       Hitta records-kolumn (nyckel med "record" eller "numrow")
-       num_files = aa.num_rows
-       partition_columns = dt.metadata().partition_columns
+  _dl_null = {col: total_null_count}   # exakt, alla rader
+  _dl_min  = {col: global_min}
+  _dl_max  = {col: global_max}
 
-    3. Snabbläge: scanner med batch_size, läs tills N rader, slice(0, N)
-       Fullständigt: ds.to_table()
+  ── Steg 2: Proportionellt filurval med dynamiskt tak ──────────────────────────
+  _sample_ratio    = min(1.0, sample_rows / total_rows)
+  _n_files_to_read = max(1, round(n_frags * _sample_ratio))
+  Välj filer jämnt spridda: step = n_frags / n_files, indices = [int(i*step) ...]
 
-    4. Per kolumn: COUNT DISTINCT via pc.unique(), null_count, kardinalitet %
-       Kardinalitet % = distinct / total_rows (INTE / read_rows)
-       Est. total kardinalitet = distinct / read_rows * total_rows (linjär extrap.)
+  Dynamiskt tak per fil (totalt max 500 000 rader):
+    _TOTAL_ROW_CAP = 500_000
+    _max_per_frag  = max(100, _TOTAL_ROW_CAP // len(_sel_frags))
 
-VARNINGSGRÄNSER:
-  Kardinalitet: ⚠️ > 700k | ⚠️ > 1M | ℹ️ > 75k (med DAX-prestandatips)
-  Null:         ℹ️ > 50% (datakvalitetsinformation, inte prestandaproblem)
+  ── Steg 3: Kolumnvis läsning ──────────────────────────────────────────────────
+  För varje kolumn i varje vald fil:
+    _ft  = _frag.to_table(columns=[col_name])       # bara denna kolumn
+    _col = _ft.column(col_name)
+    if len(_col) > _max_per_frag: _col = _col.slice(0, _max_per_frag)
+    del _ft                                           # frigör minne direkt!
+  Bygg _col_arrays = {col_name: pa.chunked_array(chunks)}
 
-  Fil-rekommendationer (bara om tabell > 100 MB eller > 100k rader):
-    Opartitionerad: ✅ om <= 1 fil, 🔴 om > 20 filer avg < 1 MB, 🟡 om > 20 filer avg < 64 MB
-    Partitionerad:  analysera per partition, varna om > 1 fil AND avg < 10 MB AND totalt > 10 MB
+  VIKTIGT: _stats = [] initieras FÖRE kolumn-loopen
+  VIKTIGT: _tbl_nbytes = sum(a.nbytes for a in _col_arrays.values()) EFTER loopen
+           if not _tbl_nbytes: används som guard i fallback
 
-  DAX-prestandatips per kardinalitetsnivå:
-    > 1M: DISTINCTCOUNT mycket kostsam, MEDIAN/PERCENTILE itererar alla rader, undvik som slicer
-    > 700k: överväg APPROXIMATEDISTINCTCOUNT(), MEDIAN kostsam, relationer kan vara långsamma
-    > 75k: DISTINCTCOUNT och MEDIAN fungerar men märks, överväg APPROXIMATEDISTINCTCOUNT()
+  ── Per kolumn ─────────────────────────────────────────────────────────────────
+  _arr = _col_arrays.get(col) eller _tbl_pa.column(col)
 
-RESULTAT PER TABELL:
-  4 metrics: Totalt radantal · Storlek MB · Antal filer · Snittfilstorlek MB
-  Täckningsprocent: read_rows / total_rows * 100
-  st.dataframe sorterad på Est. total kardinalitet DESC
-  CSV-export per tabell
-  Varningar i expanderbara sektioner med prestandatips
+  null_count: _dl_null.get(col) om Delta-logg OK, annars arr.null_count
+  null_pct  = null_count / max(total_rows, 1) * 100
+
+  distinct  = len(pc.unique(arr))
+  size_pct  = arr.nbytes / max(_tbl_nbytes, 1) * 100
+
+  Kard% av sample = distinct / max(sample_rows, read_rows, 1) * 100
+  Kard% av totalt = distinct / max(total_rows, 1) * 100
+  Adaptiva decimaler: >=1% → 1 dec, >=0.01% → 3 dec, annars 5 dec
+
+  Est. total kardinalitet:
+    saturation = distinct / max(read_rows, 1)
+    if saturation > 0.5: est = distinct, reliable = False  → visa "≥ X,XXX"
+    else: est = int(distinct / read_rows * total_rows)
+
+  Exempelvärden: upp till 5 unika icke-null + Delta-logg min/max
+
+VARNINGSGRÄNSER (kardinalitet):
+  ⚠️ > 1 000 000: DISTINCTCOUNT kostsam, MEDIAN/PERCENTILE itererar alla rader
+  ⚠️ > 700 000:   APPROXIMATEDISTINCTCOUNT(), MEDIAN kostsam, relationer
+  ℹ️ > 75 000:    DISTINCTCOUNT/MEDIAN fungerar men märks
+  ℹ️ null > 50%:  datakvalitet — EJ prestandaproblem
+
+FILREKOMMENDATIONER (bara om > 100 MB eller > 100k rader):
+  Opartitionerad: ✅ ≤1 fil; 🔴 >20 filer avg<1MB; 🟡 >20 filer avg<64MB
+  Partitionerad:  per partition, varna om >1 fil AND avg<10MB AND totalt>10MB
+
+KOLUMNORDNING I DATAFRAME:
+  Kolumn · Rekommendation · Storlek % · Distinkta (sample) ·
+  Kard% av sample · Kard% av totalt · Est. total kardinalitet ·
+  Exempelvärden · Null % · Datatyp
+
+  Sorteras på _est_sort (numerisk version av Est. total kardinalitet) DESC.
+  to_numeric(..., errors="coerce") för alla numeriska kolumner.
+  tips-kolumnen döljs i dataframe men används i varningsexpanders.
 
 ────────────────────────────────────────────────────────────────────────────────
-TEKNISKA FALLGROPAR — LÄSES NOGGRANT
+TEKNISKA FALLGROPAR
 ────────────────────────────────────────────────────────────────────────────────
 
-1. global/nonlocal fungerar inte i Streamlit. Använd [0]-listor eller session_state.
-
-2. Typannoterade modulvariabler kan inte global-deklareras.
-   FEL:  _rate_limiter: RateLimiter = RateLimiter(0)  + global _rate_limiter
-   RÄTT: _rate_limiter = RateLimiter(0)  (ingen typannotering)
-
-3. Streamlit ignorerar value=/index= på widgets med befintlig session_state-nyckel.
-   Lösning: skriv till session_state["key"] INNAN widgeten renderas, sedan st.rerun().
-
-4. requests json=body ASCII-escapar åäö.
-   RÄTT: data=json.dumps(body, ensure_ascii=False).encode("utf-8")
-
-5. DAX-parametrar lägger INTE till citattecken — de ska finnas i DAX-texten.
-   FEL:  TREATAS({{fartyg}}, ...)  -> TREATAS(Viberö, ...)    [syntaxfel]
-   RÄTT: TREATAS({"{{fartyg}}"}, ...) -> TREATAS({"Viberö"}, ...) [korrekt]
-
-6. DEFINE-queries: injicera tracking-VARs INUTI DEFINE-blocket.
-   EVALUATE-queries: wrappa med VAR ... RETURN.
-
-7. get_add_actions(flatten=True) returnerar PyArrow Table, inte dict.
-   Använd: aa.column("kolumnnamn").to_pylist() — INTE aa.to_pydict()
-
-8. deltalake head() finns inte i v1.x.
-   Använd: dataset.scanner(batch_size=N) + iterera batchar
-
-9. Power BI-token (analysis.windows.net) fungerar INTE mot Fabric REST API.
-   Fabric REST API kräver token med audience https://api.fabric.microsoft.com
-   OneLake ADLS kräver token med audience https://storage.azure.com/
-
-10. Schema-aktiverade lakehouses: /tables returnerar 400.
-    Lösning: GET /lakehouses/{id} -> properties.oneLakeTablesPath, lista via ADLS Gen2.
+1.  global/nonlocal → [0]-listor eller session_state
+2.  Typannoterade modulvariabler utan global
+3.  profile_load-mönstret: skriv session_state INNAN widgets
+4.  requests json= → ASCII-escapar åäö. Använd data=json.dumps(ensure_ascii=False).encode()
+5.  DAX-params lägger INTE till citattecken — hanteras i DAX-texten
+6.  get_add_actions(flatten=False) → PyArrow Table med nested structs
+    Använd .column(name) + .type.num_fields + [ri][fi].as_py()
+    INTE to_pydict() — crash på stora tabeller
+7.  deltalake head() finns EJ i v1.x
+8.  Tre separata tokens: Power BI ≠ Fabric REST ≠ OneLake Storage
+9.  Schema-aktiverade lakehouses: /tables → 400. Använd oneLakeTablesPath + ADLS
+10. _re_dax + _TREATAS_RE definieras på modulnivå FÖRE första användning
+11. describe_dax_query: import re as _re_local INUTI funktionen
+12. _stats = [] FÖRE kolumn-loopen
+13. _tbl_nbytes sätts EFTER _col_arrays är byggd; if not _tbl_nbytes: som guard
+14. del _ft efter varje fil för att frigöra minne och undvika segmentation fault
+15. Est. total kardinalitet är sträng med möjligt "≥ "-prefix — strip vid int()-konvertering:
+    int(str(v).replace(chr(8805)+chr(32),"").replace(",","").strip() or 0)
+16. Kardinalitet % beräknas mot total_rows (EJ read_rows)
+    Kard% av sample = distinct / max(sample_rows, read_rows) * 100
 
 ================================================================================
 PROMPT FÖR ATT ÅTERSKAPA APPLIKATIONEN
 ================================================================================
 
-Nedan är en prompt som kan användas för att prompta fram applikationen från grunden:
+Bygg en lokal Python/Streamlit-applikation: "Power BI Semantic Model Load Tester
++ Lakehouse Explorer". Start: python -m streamlit run app.py. Allt i app.py.
 
----
+BEROENDEN: streamlit, requests, pandas, plotly, deltalake>=0.17, pyarrow>=14
 
-Bygg en lokal Python/Streamlit-applikation kallad "Power BI Semantic Model Load
-Tester + Lakehouse Explorer". Applikationen startas med:
-  python -m streamlit run app.py
+DESIGN: Mörkt tema (#0d1117/#161b22/#21262d/#00d4aa). IBM Plex Mono.
+width="stretch" knappar. st.metric: label 11px, value 18px via CSS.
+Sektioner separeras med 3px #00d4aa div.
 
-Allt i en fil (app.py). En dax_library.json skapas automatiskt för profiler.
+AUTENTISERING: Tre lägen. Azure CLI hämtar FYRA tokens via subprocess på en gång:
+  _last_token (PBI), le_fabric_token (Fabric), le_storage_token (Storage),
+  kusto_token_cache (KQL). resolve_token() hanterar alla tre lägen.
 
-BEROENDEN (requirements.txt):
-  streamlit>=1.32.0, requests>=2.31.0, pandas>=2.0.0, plotly>=5.18.0,
-  deltalake>=0.17.0, pyarrow>=14.0.0
+SIDOPANEL: Autentisering → Semantisk modell (kaskad-dropdowns) →
+  RLS → Lastkonfiguration → Hämta queries (längst ner)
 
-DESIGN: Mörkt tema (#0d1117 bakgrund, #161b22 paneler, #00d4aa accent).
-IBM Plex Mono typsnitt. CSS injiceras via st.markdown(unsafe_allow_html=True).
-Knappar: width="stretch". Diagram/tabeller: use_container_width=True.
+LASTTESTAREN (# ⚡ Power BI Semantic Model Load Tester):
+  DAX-editor med {{param}}-syntax, TREATAS/IN-parameter-auto-detektering,
+  profiler, ThreadPoolExecutor körmotor, live-logg och diagram.
+  Kritiskt: json.dumps(ensure_ascii=False).encode() + data=
+  VAR-injektion. HTTP 429 retry. st.rerun() efter körning.
 
-AUTENTISERING (sidopanel):
-  Tre lägen: Azure CLI (rekommenderat), Manuell token, Service Principal.
-  Azure CLI: en knapp "🔑 Hämta alla tokens" hämtar fyra tokens via subprocess:
-    Power BI (analysis.windows.net), Fabric REST API (api.fabric.microsoft.com),
-    OneLake Storage (storage.azure.com), Eventhouse/KQL (kusto.kusto.windows.net)
-  Alla tokens sparas i session_state och visas med ✅/⬜ status.
+H�MTA QUERIES (📊, sidopanel):
+  fetch_top_queries_from_logs() med: top_n, min_count, sort_mode (5 val),
+  exclude_session_prefix, date_from/to (default senaste 7 dagar).
+  KQL: summarize Count/AvgMs/P95Ms/AvgCpuMs/LastSeen=max()/LastUser=take_any().
+  cluster_queries_by_pattern() propagerar p95/cpu/last_user/last_seen.
+  describe_dax_query(): LOKAL regex-analys, import re as _re_local inuti funktionen.
+  Rensa eh_desc_*-nycklar vid ny hämtning. Varaktigheter i sekunder (ms/1000).
 
-SIDOPANEL (uppifrån ner):
-  🔐 Autentisering → 🎯 Semantisk modell (kaskad-dropdowns workspace/dataset via
-  Power BI REST API) → 👤 RLS (toggle, en/flera användare, UPN + roller) →
-  ⚙️ Lastkonfiguration (iterationer/tidsbaserat, trafikprofiler, rate limiting) →
-  📊 Hämta queries från logg (Eventhouse/KQL-integration med mönsterigenkänning)
+LAKEHOUSE EXPLORER (# 🗄️, efter 3px turkos separator):
+  Kaskad workspace/lakehouse dropdowns. Tabellupptäckt via oneLakeTablesPath + ADLS.
 
-LASTTESTAREN (huvudvy, rubrik # ⚡ Power BI Semantic Model Load Tester):
-  DAX-editor med enkel/multi-query läge, platshållarsyntax {{param}},
-  automatisk parameterdetektering (TREATAS och IN-mönster), DAX-profiler,
-  körmotor med ThreadPoolExecutor, live-logg och realtidsdiagram,
-  P50/P95/P99-metriker, resultatflikar med CSV-export.
+  Delta-analys i TRE STEG:
 
-  KRITISKT API-anrop: json.dumps(body, ensure_ascii=False).encode("utf-8") + data=
-  (INTE json= — det ASCII-escapar åäö)
-  DAX VAR-injektion för loggspårning: _Session, _ImpersonatedUser, _CorrelationId
-  HTTP 429: retry med exponential backoff.
+  Steg 1: get_add_actions(flatten=False) → nested PyArrow structs → null_count/min/max
+    per kolumn för HELA tabellen. NOLL datainläsning. INTE to_pydict().
 
-LAKEHOUSE EXPLORER (rubrik # 🗄️ Lakehouse Explorer, separerad med 3px #00d4aa):
-  Kaskad-dropdowns workspace/lakehouse via Fabric REST API (Fabric-token krävs).
-  Tabellupptäckt via oneLakeTablesPath (från /lakehouses/{id}) + ADLS Gen2-listning.
-  Hanterar automatiskt schema-aktiverade lakehouses (undermappar = scheman).
-  Multiselect för scheman → multiselect för tabeller → analysknapp med avbryt-knapp.
+  Steg 2: Proportionellt filurval
+    sample_ratio = sample_rows / total_rows
+    n_files = max(1, round(n_frags * sample_ratio))
+    Välj filer jämnt spridda med step = n_frags / n_files
+    Dynamiskt tak: _TOTAL_ROW_CAP = 500_000; max_per_frag = max(100, 500_000 // n_sel_filer)
 
-  Delta-analys via deltalake-biblioteket:
-    DeltaTable(abfss://{ws}@onelake.dfs.fabric.microsoft.com/{lh}/Tables/{schema}/{tbl},
-               storage_options={bearer_token, use_fabric_endpoint:true, account_name:onelake})
-    Metadata gratis från get_add_actions() (PyArrow Table — använd .column().to_pylist())
-    Snabbläge: scanner-loop tills N rader, standard 200 000 rader
-    Fullständig analys: ds.to_table()
+  Steg 3: Kolumnvis läsning per vald fil
+    _ft = frag.to_table(columns=[col]); slice(0, max_per_frag); del _ft  ← KRITISKT
 
-  Per kolumn: COUNT DISTINCT (pc.unique()), kardinalitet % av TOTALT (ej sample),
-  estimerad total kardinalitet (linjär extrapolation), null %.
+  _stats = []  FÖRE kolumn-loopen
+  _tbl_nbytes = sum(a.nbytes ...) EFTER _col_arrays byggts; if not _tbl_nbytes: guard
 
-  Varningsgränser:
-    Kardinalitet: ⚠️>700k (APPROXIMATEDISTINCTCOUNT tips), ⚠️>1M (undvik DISTINCTCOUNT/MEDIAN),
-                  ℹ️>75k (prestandatips), null ℹ️>50% (datakvalitetsinfo — inte prestandaproblem)
-    Filer (bara om >100MB eller >100k rader):
-      Opartitionerad: ✅ om ≤1 fil, annars varna om >20 filer
-      Partitionerad: analysera per partition, varna om >1 fil AND snitt<10MB AND totalt>10MB
+  Per kolumn:
+    null_pct: från Delta-logg (exakt) / total_rows
+    distinct: pc.unique(arr)
+    size_pct: arr.nbytes / tbl_nbytes * 100
+    Kard% av sample = distinct / max(sample_rows, read_rows) * 100
+    Kard% av totalt = distinct / total_rows * 100  (adaptiva decimaler)
+    Est: om saturation>0.5 → "≥ X,XXX"; annars linjär extrap
+    Exempelvärden: sample-unika + Delta min/max
 
-  Visa 4 metrics per tabell: radantal · storlek MB · antal filer · snittfilstorlek
-  Progressbar per kolumn + avbryt-knapp. CSV-export per tabell.
+  Varningar: ⚠️>700k/1M (med DAX-tips), ℹ️>75k, null>50%=info.
+  Filer: opartitionerad >20; partitionerad per partition.
+  Kolumnordning: Kolumn·Rek·Storlek%·Distinkta·Kard%sample·Kard%tot·Est·Exempel·Null%·Typ
 
-TEKNISKA KRAV:
-  - Inga global/nonlocal — använd [0]-listor eller session_state
-  - Inga typannoterade modulvariabler med global
-  - session_state-nycklar skrivs INNAN widgets renderas (profile_load-mönstret)
-  - get_add_actions returnerar PyArrow Table, inte dict
-  - deltalake v1.x saknar head() — använd scanner-loop
-  - Separata tokens krävs: Power BI ≠ Fabric REST ≠ OneLake Storage
-
----
+  KRITISKA TEKNISKA KRAV:
+  - del _ft efter varje fil → undviker segmentation fault
+  - get_add_actions(flatten=False) med .column().type.num_fields/.as_py()
+  - Est. total är sträng med "≥ "-prefix → strip med chr(8805) vid int()-konvertering
+  - _tbl_nbytes EFTER _col_arrays; if not _tbl_nbytes: guard mot överskrivning
+================================================================================

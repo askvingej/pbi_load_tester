@@ -78,6 +78,14 @@ st.markdown("""
         letter-spacing: 0.06em;
         text-transform: uppercase;
     }
+
+    /* Mindre metrics för query-statistik i loggsektionen */
+    div[data-testid="stMetric"] label {
+        font-size: 11px !important;
+    }
+    div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
+        font-size: 18px !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1431,6 +1439,10 @@ def fetch_top_queries_from_logs(
     dataset_id: str,
     top_n: int = 20,
     min_count: int = 2,
+    sort_mode: str = "Vanligast körda",
+    exclude_session_prefix: str = "test-",
+    date_from: str = "",
+    date_to: str = "",
 ) -> list[dict]:
     """
     Hämtar de N vanligast körda DAX-queries från SemanticModelLogs.
@@ -1499,7 +1511,10 @@ def fetch_top_queries_from_logs(
     has_query_text = "QueryText" in available_cols
     has_event_text = "EventText" in available_cols
     has_app_ctx    = "ApplicationContext" in available_cols
-    has_item_id    = "ItemId" in available_cols
+    has_exec_user = "ExecutingUser" in available_cols or "UserName" in available_cols
+    col_exec_user = _col(["ExecutingUser", "UserName", "UserId"])
+    has_cpu       = "CpuTimeMs" in available_cols
+    has_item_id   = "ItemId" in available_cols
 
     # Bygg dataset-filter
     if has_item_id:
@@ -1522,13 +1537,61 @@ def fetch_top_queries_from_logs(
             "Ingen lämplig kolumn för query-text hittades.\n"
             f"Tillgängliga kolumner: {available_cols}"
         )
+
+    # Bygg sorteringskolumn och aggregeringar baserat på sort_mode
+    sort_map = {
+        "Vanligast körda":       ("Count",    "count()"),
+        "Längst duration (p95)": ("P95Ms",    f"percentile(toreal({col_duration}), 95)"),
+        "Längst duration (avg)": ("AvgMs",    f"round(avg(toreal({col_duration})), 0)"),
+        "Högst CPU-tid":         ("AvgCpuMs", f"round(avg(toreal(CpuTimeMs)), 0)" if has_cpu else f"round(avg(toreal({col_duration})), 0)"),
+        "Senast körda":          ("LastSeen", f"max({col_time})"),
+    }
+    sort_col, sort_agg = sort_map.get(sort_mode, sort_map["Vanligast körda"])
+
+    # Baskolumner i summarize — arg_max ger oss användaren vid senaste körning
+    summarize_cols = (
+        "    Count    = count(),\n"
+        "    AvgMs    = round(avg(toreal(" + col_duration + ")), 0),\n"
+        "    P95Ms    = percentile(toreal(" + col_duration + "), 95),\n"
+    )
+    if has_cpu:
+        summarize_cols += "    AvgCpuMs = round(avg(toreal(CpuTimeMs)), 0),\n"
+    if has_exec_user:
+        summarize_cols += (
+            "    LastSeen = max(" + col_time + "),\n"
+            "    LastUser = take_any(" + col_exec_user + ")\n"
+        )
+    else:
+        summarize_cols += "    LastSeen = max(" + col_time + ")\n"
+
+    # Session-exkluderingsfilter (exkludera lasttests-sessions)
+    session_filter = ""
+    if exclude_session_prefix and "_Session" in (available_cols or []):
+        pass  # _Session finns inte som kolumn — filtrera på query-texten istället
+    if exclude_session_prefix:
+        # Exkludera queries som innehåller VAR _Session = "test-..." (lasttester)
+        session_filter = (
+            "| where not(CleanQuery matches regex @'VAR _Session\\s*=\\s*\"" +
+            exclude_session_prefix.replace('"', '\\"') +
+            "')\n"
+        )
+
+
+    # Datumfilter
+    date_filter = ""
+    if date_from:
+        date_filter += "| where " + col_time + " >= datetime(" + str(date_from) + ")\n"
+    if date_to:
+        date_filter += "| where " + col_time + " < datetime(" + str(date_to) + ") + 1d\n"
+
     kql = (
         "SemanticModelLogs\n"
         "| where " + col_operation + " == \"QueryEnd\"\n"
         "| where tolower(WorkspaceId) == \"" + ws_id_clean + "\"\n"
-        + dataset_filter +
-        query_extend +
-        "| where isnotempty(" + query_col + ")\n"
+        + dataset_filter
+        + date_filter
+        + query_extend
+        + "| where isnotempty(" + query_col + ")\n"
         "| extend CleanQuery = replace_regex(\n"
         "    " + query_col + ",\n"
         "    @'VAR _Session[^\\n]*\\n(VAR _ImpersonatedUser[^\\n]*\\n)?(VAR _CorrelationId[^\\n]*\\n)?',\n"
@@ -1544,14 +1607,16 @@ def fetch_top_queries_from_logs(
         "| where CleanQuery !contains \"$SYSTEM\"\n"
         "| where CleanQuery !contains \"__XL_\"\n"
         "| where CleanQuery !contains \"COLUMNTRAITS\"\n"
+        + session_filter +
         "| summarize\n"
-        "    Count    = count(),\n"
-        "    AvgMs    = round(avg(toreal(" + col_duration + ")), 0),\n"
-        "    LastSeen = max(" + col_time + ")\n"
+        + summarize_cols +
         "  by CleanQuery\n"
         "| where Count >= " + str(min_count) + "\n"
-        "| top " + str(top_n) + " by Count desc\n"
-        "| project CleanQuery, Count, AvgMs, LastSeen\n"
+        "| top " + str(top_n) + " by " + sort_col + " desc\n"
+        "| project CleanQuery, Count, AvgMs, P95Ms, "
+        + ("AvgCpuMs, " if has_cpu else "")
+        + ("LastUser, " if has_exec_user else "")
+        + "LastSeen\n"
     )
 
     body = {
@@ -1591,26 +1656,108 @@ def fetch_top_queries_from_logs(
             "query":     rec.get("CleanQuery", ""),
             "count":     int(rec.get("Count", 0)),
             "avg_ms":    float(rec.get("AvgMs", 0)),
+            "p95_ms":    float(rec.get("P95Ms", rec.get("AvgMs", 0))),
+            "cpu_ms":    float(rec.get("AvgCpuMs", 0)) if rec.get("AvgCpuMs") else None,
+            "last_user": str(rec.get("LastUser", "")).strip(),
             "last_seen": str(rec.get("LastSeen", "")),
         })
     return result, kql
 
 
 
+def describe_dax_query(dax: str) -> str:
+    """
+    Analyserar en DAX-query lokalt och genererar en professionell beskrivning.
+    Ingen extern API-kommunikation — all analys sker i Python via regex.
+    """
+    import re as _re_local
+    d = dax.upper()
+
+    parts = []
+
+    # ── Tabeller ──────────────────────────────────────────────────────────────
+    tables = list(dict.fromkeys(_re_local.findall(r"'([^']+)'\[", dax)))
+    # Filtrera bort interna/beräknade tabeller
+    tables = [t for t in tables if not t.startswith("__") and "RowNumber" not in t]
+    if tables:
+        unique_tables = list(dict.fromkeys(tables))
+        parts.append(f"Använder tabell{'er' if len(unique_tables)>1 else 'en'} "
+                     f"{', '.join(f'*{t}*' for t in unique_tables[:5])}"
+                     + (" m.fl." if len(unique_tables) > 5 else "") + ".")
+
+    # ── Aggregeringar ─────────────────────────────────────────────────────────
+    agg_found = []
+    for fn, label in [
+        ("SUMMARIZECOLUMNS", "aggregerar data"),
+        ("SUMMARIZE(",       "aggregerar data"),
+        ("GROUPBY(",         "grupperar data"),
+        ("ROLLUPADDISSUBTOTAL", "inkluderar delsummor"),
+        ("TOPN(",            "begränsar till toppresultat"),
+        ("CALCULATE(",       "beräknar med filter"),
+        ("CALCULATETABLE(",  "filtrerar tabell"),
+    ]:
+        if fn in d and label not in agg_found:
+            agg_found.append(label)
+    if agg_found:
+        parts.append("Queryn " + " och ".join(agg_found[:3]) + ".")
+
+    # ── Mått ──────────────────────────────────────────────────────────────────
+    measures = list(dict.fromkeys(_re_local.findall(r'"([^"]{3,40})"\s*,\s*[A-Z]', dax)))
+    measures = [m for m in measures if not m.startswith("_") and " " in m][:4]
+    if measures:
+        parts.append(f"Returnerar måtten: {', '.join(f'*{m}*' for m in measures)}.")
+
+    # ── Filter ────────────────────────────────────────────────────────────────
+    filter_parts = []
+    if "TREATAS(" in d:
+        cols = _re_local.findall(r"TREATAS\s*\([^,]+,\s*'[^']+'\[([^\]]+)\]", dax)
+        if cols:
+            filter_parts.append(f"filtrerar på {', '.join(cols[:3])}")
+    if " IN {" in d or " IN {" in d.replace(" ", ""):
+        in_cols = _re_local.findall(r"'[^']+'\[([^\]]+)\]\s+IN\s+\{", dax)
+        if in_cols:
+            filter_parts.append(f"begränsar {', '.join(in_cols[:2])}")
+    if "DATE(" in d or ">= DATE" in d or "<= DATE" in d:
+        filter_parts.append("tillämpar datumfilter")
+    if filter_parts:
+        parts.append("Filtrering: " + "; ".join(filter_parts) + ".")
+
+    # ── Sortering ─────────────────────────────────────────────────────────────
+    if "ORDER BY" in d:
+        parts.append("Resultatet sorteras.")
+
+    # ── Fönsterfunktioner ─────────────────────────────────────────────────────
+    if "WINDOW(" in d or "RANK(" in d or "ROWNUMBER(" in d:
+        parts.append("Använder fönsterfunktioner för rangordning eller löpande beräkningar.")
+
+    # ── Tidsintelligens ───────────────────────────────────────────────────────
+    time_fns = [f for f in ["SAMEPERIODLASTYEAR","DATEADD","DATESYTD","TOTALYTD",
+                             "PREVIOUSYEAR","PREVIOUSMONTH","PARALLELPERIOD"]
+                if f in d]
+    if time_fns:
+        parts.append(f"Innehåller tidsintelligens ({', '.join(time_fns[:2])}).")
+
+    # ── Komplexitet ───────────────────────────────────────────────────────────
+    n_vars = len(_re_local.findall(r'\bVAR\b', d))
+    n_evaluate = d.count("EVALUATE")
+    if n_evaluate > 1:
+        parts.append(f"Returnerar {n_evaluate} separata resultatmängder.")
+    if n_vars > 5:
+        parts.append(f"Komplex query med {n_vars} variabler.")
+
+    return " ".join(parts) if parts else "Enkel DAX-query utan identifierbara mönster."
+
+
 # ─── Mönsterigenkänning för DAX-queries ──────────────────────────────────────
 import re as _re_dax
 
-# Regex som matchar DAX-strängliteraler och numeriska värden
-_STR_RE  = _re_dax.compile(r'"([^"]*)"')
-_NUM_RE  = _re_dax.compile(r'\b(\d{4,}|\d+\.\d+)\b')
-_DATE_RE = _re_dax.compile(r'DATE\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)')
-
-# Regex för TREATAS({val1, val2, ...}, 'Tabell'[Kolumn])
+_STR_RE     = _re_dax.compile(r'"([^"]*)"')
+_NUM_RE     = _re_dax.compile(r'\b(\d{4,}|\d+\.\d+)\b')
+_DATE_RE    = _re_dax.compile(r'DATE\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)')
 _TREATAS_RE = _re_dax.compile(
     r"TREATAS\s*\(\s*\{([^}]+)\}\s*,\s*'?([^'\[]+)'?\s*\[([^\]]+)\]\s*\)",
     _re_dax.IGNORECASE,
 )
-
 
 def _sanitize_param_name(s: str) -> str:
     """Konverterar ett kolumnnamn till ett snake_case parameternamn."""
@@ -1919,6 +2066,10 @@ def cluster_queries_by_pattern(
             "query_count": len(recs),
             "total_count": sum(r["count"] for r in recs),
             "avg_ms":      sum(r["avg_ms"] * r["count"] for r in recs) / max(sum(r["count"] for r in recs), 1),
+            "p95_ms":      max((r.get("p95_ms", r["avg_ms"]) for r in recs), default=0),
+            "avg_cpu_ms":  (sum(r.get("cpu_ms", 0) * r["count"] for r in recs) / max(sum(r["count"] for r in recs), 1)) or None,
+            "last_user":   next((r.get("last_user","") for r in sorted(recs, key=lambda x: x.get("last_seen",""), reverse=True) if r.get("last_user")), ""),
+            "last_seen":   max((r.get("last_seen","") for r in recs), default=""),
             "sample":      qs[0],
         })
 
@@ -2351,6 +2502,34 @@ with st.sidebar:
         key="eh_min_count",
     )
 
+    import datetime as _dt
+    _today     = _dt.date.today()
+    _week_ago  = _today - _dt.timedelta(days=7)
+    _dc1, _dc2 = st.columns(2)
+    with _dc1:
+        eh_date_from = st.date_input("Från datum", value=_week_ago, key="eh_date_from")
+    with _dc2:
+        eh_date_to   = st.date_input("Till datum", value=_today,    key="eh_date_to")
+    eh_sort_mode = st.selectbox(
+        "Sortera efter",
+        ["Vanligast körda", "Längst duration (p95)", "Längst duration (avg)",
+         "Högst CPU-tid", "Senast körda"],
+        key="eh_sort_mode",
+        help="Välj vad du vill optimera för",
+    )
+    eh_exclude_prefix = st.text_input(
+        "Exkludera sessions med prefix",
+        value="test-",
+        key="eh_exclude_prefix",
+        help="Queries från lasttester exkluderas automatiskt. Lämna tomt för att inkludera allt.",
+    )
+    eh_ai_describe = st.toggle(
+        "🤖 AI-beskrivning per query",
+        value=False,
+        key="eh_ai_describe",
+        help="Genererar en kort beskrivning av vad varje query gör via Claude API. Tar lite längre tid.",
+    )
+
     # Visa kontext för vad som ska hämtas
     if workspace_id and dataset_id:
         _ds_name = ds_labels[ds_idx] if "ds_labels" in dir() and ds_idx is not None else dataset_id[:8]
@@ -2359,7 +2538,7 @@ with st.sidebar:
         st.caption("Välj en semantisk modell ovan för att aktivera hämtning")
 
     fetch_btn = st.button(
-        "🔍 Hämta vanligaste queries",
+        "🔍 Hämta queries",
         width="stretch",
         disabled=not (
             _preview_token and
@@ -2368,20 +2547,28 @@ with st.sidebar:
             st.session_state.get("eh_cluster", "").strip() and
             st.session_state.get("eh_database", "").strip()
         ),
-        help="Hämtar och grupperar de mest körda DAX-queries för vald modell",
+        help="Hämtar DAX-queries från SemanticModelLogs baserat på vald sortering",
     )
 
     if fetch_btn:
+        # Rensa gamla AI-beskrivningar när nya queries hämtas
+        for _k in list(st.session_state.keys()):
+            if _k.startswith("eh_desc_"):
+                del st.session_state[_k]
         with st.spinner("Hämtar och analyserar queries från SemanticModelLogs..."):
             try:
                 fetched, generated_kql = fetch_top_queries_from_logs(
-                    token        = _preview_token,
-                    cluster_url  = st.session_state["eh_cluster"].strip(),
-                    database     = st.session_state["eh_database"].strip(),
-                    workspace_id = workspace_id,
-                    dataset_id   = dataset_id,
-                    top_n        = int(st.session_state["eh_top_n"]),
-                    min_count    = int(st.session_state["eh_min_count"]),
+                    token                  = _preview_token,
+                    cluster_url            = st.session_state["eh_cluster"].strip(),
+                    database               = st.session_state["eh_database"].strip(),
+                    workspace_id           = workspace_id,
+                    dataset_id             = dataset_id,
+                    top_n                  = int(st.session_state["eh_top_n"]),
+                    min_count              = int(st.session_state["eh_min_count"]),
+                    sort_mode              = st.session_state.get("eh_sort_mode", "Vanligast körda"),
+                    exclude_session_prefix = st.session_state.get("eh_exclude_prefix", "test-"),
+                    date_from              = str(st.session_state.get("eh_date_from", "")),
+                    date_to                = str(st.session_state.get("eh_date_to", "")),
                 )
                 st.session_state["eh_last_kql"] = generated_kql
                 if fetched:
@@ -2403,7 +2590,8 @@ with st.sidebar:
             st.caption("Kopiera och kör direkt i Fabric Eventhouse för att felsöka.")
     clustered = st.session_state.get("eh_clustered", [])
     if clustered:
-        st.markdown(f"**Välj mönster att använda** ({len(clustered)} hittade):")
+        _sort_label = st.session_state.get("eh_sort_mode", "Vanligast körda")
+        st.markdown(f"**{len(clustered)} mönster hittade** — sorterat: *{_sort_label}*")
 
         selected_clusters = []
         for idx, cl in enumerate(clustered):
@@ -2412,22 +2600,54 @@ with st.sidebar:
                 f" · {len(cl['params'])} param{'etrar' if len(cl['params'])>1 else 'eter'}"
                 if has_params else ""
             )
-            label = (
-                f"Mönster #{idx+1} · {cl['total_count']}× körningar · "
-                f"{cl['avg_ms']:.0f}ms snitt · "
-                f"{cl['query_count']} varianter{param_info}"
+            _p95   = cl.get("p95_ms", cl.get("avg_ms", 0))
+            _cpu   = cl.get("avg_cpu_ms")
+            _extra = f" · CPU {_cpu:.0f}ms" if _cpu else ""
+            label  = (
+                f"#{idx+1} · {cl['total_count']}× · "
+                f"avg {cl['avg_ms']:.0f}ms · p95 {_p95:.0f}ms{_extra}{param_info}"
             )
 
             with st.expander(label, expanded=False):
+                # AI-beskrivning
+                _desc_key = f"eh_desc_{idx}"
+                if st.session_state.get("eh_ai_describe"):
+                    if _desc_key not in st.session_state:
+                        with st.spinner("Analyserar query..."):
+                            st.session_state[_desc_key] = describe_dax_query(cl["template"])
+                        st.rerun()
+                    if st.session_state.get(_desc_key):
+                        st.info(f"🤖 {st.session_state[_desc_key]}")
+                else:
+                    if st.button("🤖 Beskriv query", key=f"eh_desc_btn_{idx}", width="stretch"):
+                        with st.spinner("Analyserar..."):
+                            st.session_state[_desc_key] = describe_dax_query(cl["template"])
+                        st.rerun()
+                    if st.session_state.get(_desc_key):
+                        st.info(f"🤖 {st.session_state[_desc_key]}")
+
                 # Förhandsvisning av template
-                preview = cl["template"][:300].replace("\n", "\n")
+                preview = cl["template"][:300]
                 st.code(preview + ("..." if len(cl["template"]) > 300 else ""), language="sql")
+
+                # Statistik
+                _stat_cols = st.columns(4)
+                _stat_cols[0].metric("Körningar",    f"{cl['total_count']:,}")
+                _stat_cols[1].metric("Avg (sek)",    f"{cl['avg_ms']/1000:.1f}")
+                _stat_cols[2].metric("p95 (sek)",    f"{_p95/1000:.1f}")
+                _last_user = cl.get("last_user", "")
+                _last_seen = cl.get("last_seen", "")[:16].replace("T", " ") if cl.get("last_seen") else ""
+                if _last_user or _last_seen:
+                    st.caption(
+                        f"Senast kördes av **{_last_user or '?'}**"
+                        + (f" · {_last_seen}" if _last_seen else "")
+                    )
 
                 # Visa föreslagna parametrar
                 if cl["params"]:
                     st.markdown("**Föreslagna parametrar:**")
                     for p in cl["params"]:
-                        vals_str = ", ".join(p["values"][:5])
+                        vals_str = ", ".join(str(v) for v in p["values"][:5])
                         if len(p["values"]) > 5:
                             vals_str += f" ... (+{len(p['values'])-5})"
                         st.caption(
@@ -3298,41 +3518,113 @@ else:
                                 except Exception as _me:
                                     _delta_meta = {"error": str(_me), "debug_keys": []}
                                 _ds = _dt.to_pyarrow_dataset()
-                                if _sample_only and _sample_rows:
-                                    # Hämta radantal först (från Delta-logg, gratis)
-                                    try:
-                                        _total_rows = sum(
-                                            f.num_rows for f in _ds.get_fragments()
-                                            if hasattr(f, 'num_rows') and f.num_rows
-                                        ) or None
-                                    except Exception:
-                                        _total_rows = None
-                                    # Läs första N rader via scanner
+                                if _sample_only:
                                     import pyarrow as pa
-                                    _scanner = _ds.scanner(batch_size=_sample_rows)
-                                    _batches = []
-                                    _rows_read = 0
-                                    for _batch in _scanner.to_batches():
-                                        _batches.append(_batch)
-                                        _rows_read += len(_batch)
-                                        if _rows_read >= _sample_rows:
-                                            break
-                                    _tbl_pa   = pa.Table.from_batches(_batches).slice(0, _sample_rows)
-                                    _read_rows = len(_tbl_pa)
-                                    _is_sample = True
-                                else:
-                                    try:
-                                        _total_rows = sum(
-                                            f.num_rows for f in _ds.get_fragments()
-                                            if hasattr(f, 'num_rows') and f.num_rows
-                                        ) or None
-                                    except Exception:
-                                        _total_rows = None
-                                    _tbl_pa    = _ds.to_table()
-                                    _read_rows = len(_tbl_pa)
-                                    _is_sample = False
+                                    import pyarrow.parquet as pq
 
-                                # Analysera kolumner med progressbar
+                                    _total_rows = _delta_meta.get("total_rows")
+
+                                    # ── Hämta all statistik från Delta-loggen ─────────────
+                                    # get_add_actions(flatten=False) returnerar nested structs:
+                                    # null_count.{col}, min.{col}, max.{col} per fil.
+                                    # NOLL datainläsning — bara Delta transaction log.
+                                    _status_text.info("⏳ Hämtar kolumnstatistik från Delta-loggen...")
+                                    _dl_null  = {}   # {col: total_null_count}
+                                    _dl_min   = {}   # {col: global_min}
+                                    _dl_max   = {}   # {col: global_max}
+                                    _dl_ok    = False
+                                    try:
+                                        _aa_nested = _dt.get_add_actions(flatten=False)
+                                        _aa_names  = _aa_nested.schema.names
+
+                                        # null_count är en struct-kolumn
+                                        if "null_count" in _aa_names:
+                                            _nc_col = _aa_nested.column("null_count")
+                                            # Iterera struct-fält
+                                            for _fi in range(_nc_col.type.num_fields):
+                                                _cn = _nc_col.type.field(_fi).name
+                                                _vals = [
+                                                    _nc_col[_ri][_fi].as_py()
+                                                    for _ri in range(len(_nc_col))
+                                                ]
+                                                _dl_null[_cn] = sum(
+                                                    v for v in _vals if v is not None
+                                                )
+
+                                        if "min_values" in _aa_names or "min" in _aa_names:
+                                            _mn_key = "min_values" if "min_values" in _aa_names else "min"
+                                            _mx_key = "max_values" if "max_values" in _aa_names else "max"
+                                            _mn_col = _aa_nested.column(_mn_key)
+                                            _mx_col = _aa_nested.column(_mx_key)
+                                            for _fi in range(_mn_col.type.num_fields):
+                                                _cn = _mn_col.type.field(_fi).name
+                                                _mn_vals = [_mn_col[_ri][_fi].as_py() for _ri in range(len(_mn_col))]
+                                                _mx_vals = [_mx_col[_ri][_fi].as_py() for _ri in range(len(_mx_col))]
+                                                _mn_vals = [v for v in _mn_vals if v is not None]
+                                                _mx_vals = [v for v in _mx_vals if v is not None]
+                                                if _mn_vals: _dl_min[_cn] = min(_mn_vals)
+                                                if _mx_vals: _dl_max[_cn] = max(_mx_vals)
+                                        _dl_ok = bool(_dl_null or _dl_min)
+                                    except Exception as _dl_err:
+                                        _dl_ok = False
+
+                                    # Proportionellt filurval med hårt tak på rader per fil
+                                    _fragments       = list(_ds.get_fragments())
+                                    _n_frags         = len(_fragments)
+                                    _sample_ratio    = min(1.0, _sample_rows / max(_total_rows or _sample_rows, 1))
+                                    _n_files_to_read = max(1, round(_n_frags * _sample_ratio))
+
+                                    if _n_files_to_read >= _n_frags:
+                                        _sel_frags = _fragments
+                                    else:
+                                        _step = _n_frags / _n_files_to_read
+                                        _sel_frags = [_fragments[int(i * _step)]
+                                                      for i in range(_n_files_to_read)
+                                                      if int(i * _step) < _n_frags]
+
+                                    # Dynamiskt tak per fil baserat på antal valda filer:
+                                    # Totalt max ~500 000 rader i minnet oavsett tabellstorlek
+                                    _TOTAL_ROW_CAP  = 500_000
+                                    _max_per_frag   = max(100, _TOTAL_ROW_CAP // max(len(_sel_frags), 1))
+
+                                    _status_text.info(
+                                        f"⏳ Samplar {len(_sel_frags)}/{_n_frags} filer, "
+                                        f"max {_max_per_frag:,} rader/fil..."
+                                    )
+
+                                    _col_arrays    = {}
+                                    _schema_fields = [f for f in _dt.schema().fields
+                                                      if not f.name.startswith("__")]
+                                    for _sci, _sf in enumerate(_schema_fields):
+                                        if st.session_state.get("le_abort"):
+                                            break
+                                        _col_progress.progress(
+                                            _sci / max(len(_schema_fields), 1),
+                                            text=f"Kolumn {_sci+1}/{len(_schema_fields)}: {_sf.name}"
+                                        )
+                                        _chunks = []
+                                        for _frag in _sel_frags:
+                                            try:
+                                                _ft  = _frag.to_table(columns=[_sf.name])
+                                                _col = _ft.column(_sf.name)
+                                                if len(_col) > _max_per_frag:
+                                                    _col = _col.slice(0, _max_per_frag)
+                                                _chunks.append(_col)
+                                                del _ft  # frigör minne direkt
+                                            except Exception:
+                                                pass
+                                        if _chunks:
+                                            _col_arrays[_sf.name] = pa.chunked_array(_chunks)
+
+                                    _read_rows  = max((len(a) for a in _col_arrays.values()), default=0)
+                                    _is_sample  = True
+                                    _tbl_pa     = None
+                                    _tbl_nbytes = sum(a.nbytes for a in _col_arrays.values())
+
+
+                                # Beräkna total tabellstorlek i minnet för storleksandel
+                                if not _tbl_nbytes:
+                                    _tbl_nbytes = _tbl_pa.nbytes if (_tbl_pa is not None and hasattr(_tbl_pa, 'nbytes')) else 0
                                 _stats = []
                                 for _ci, _f in enumerate(_fields):
                                     if st.session_state.get("le_abort"):
@@ -3342,19 +3634,83 @@ else:
                                         text=f"Kolumn {_ci+1}/{_n_cols}: {_f.name}"
                                     )
                                     try:
-                                        _arr      = _tbl_pa.column(_f.name)
-                                        _nulls    = _arr.null_count
-                                        _null_pct = round(_nulls / max(_read_rows, 1) * 100, 1)
-                                        _distinct = len(pc.unique(_arr))
-                                        _card_pct = round(_distinct / max(_total_rows or _read_rows, 1) * 100, 1)
+                                        if _col_arrays and _f.name in _col_arrays:
+                                            _arr = _col_arrays[_f.name]
+                                        elif _tbl_pa is not None and _f.name in _tbl_pa.schema.names:
+                                            _arr = _tbl_pa.column(_f.name)
+                                        else:
+                                            _arr = None
+                                        if _arr is None:
+                                            _stats.append({
+                                                "Kolumn":                  _f.name,
+                                                "Datatyp":                 str(_f.type),
+                                                "Exempelvärden":           "—",
+                                                "Storlek %":               None,
+                                                "Distinkta (sample)":      None,
+                                                "Kard% av sample":         None,
+                                                "Kard% av totalt":         None,
+                                                "Est. total kardinalitet": None,
+                                                "Null %":                  round(_dl_null.get(_f.name, 0) / max(_total_rows or 1, 1) * 100, 1) if _dl_ok else None,
+                                                "Rekommendation":          "ℹ️ Kolumn ej i sample",
+                                                "tips":                    [],
+                                            })
+                                            continue
 
-                                        # Uppskatta total kardinalitet baserat på totalt radantal
+                                        # Null-count: Delta-logg är exakt (alla rader)
+                                        _dl_null_val = _dl_null.get(_f.name) if _dl_ok else None
+                                        _nulls    = _dl_null_val if _dl_null_val is not None else _arr.null_count
+                                        _null_pct = round(_nulls / max(_total_rows or _read_rows, 1) * 100, 1)
+
+                                        _distinct = len(pc.unique(_arr))
+                                        # Kolumnstorlek i minnet och andel av tabellen
+                                        _col_bytes  = _arr.nbytes if hasattr(_arr, 'nbytes') else 0
+                                        _size_pct   = round(_col_bytes / max(_tbl_nbytes, 1) * 100, 1) if _tbl_nbytes else 0
+                                        _card_pct_of_sample = _distinct / max(_sample_rows, _read_rows, 1) * 100
+                                        _card_pct_of_total  = _distinct / max(_total_rows or _read_rows, 1) * 100
+
+                                        # Estimera total kardinalitet med Chao1-inspirerad approach:
+                                        # Linjär extrap. men cap:ad till min(extrapolerat, distinct*faktor)
+                                        # Om samplet täcker stor andel av möjliga värden → extrapolera försiktigt
                                         _est_total_card = None
                                         if _is_sample and _total_rows and _total_rows > _read_rows:
-                                            # Linjär extrapolation — underskattar vid hög kardinalitet
-                                            _est_total_card = int(_distinct / max(_read_rows, 1) * _total_rows)
+                                            _coverage_ratio = _read_rows / max(_total_rows, 1)
+                                            # Linjär extrap: distinct / read_rows * total_rows
+                                            _linear_est = int(_distinct / max(_read_rows, 1) * _total_rows)
+                                            # Om vi redan sett > 80% av sannolika unika värden
+                                            # (distinct nära sample_size) → extrapolera försiktigt
+                                            _saturation = _distinct / max(_sample_rows, _read_rows, 1)
+                                            if _saturation > 0.8:
+                                                # Hög mättnadsgrad → troligen nära taket
+                                                # Extrapolera konservativt
+                                                _est_total_card = int(_distinct * (1 + (1 - _saturation)))
+                                            else:
+                                                _est_total_card = _linear_est
 
+                                        def _fmt_pct(v):
+                                            if v is None:      return None
+                                            if v >= 1:         return round(v, 1)
+                                            elif v >= 0.01:    return round(v, 3)
+                                            else:              return round(v, 5)
+
+                                        # Estimera total kardinalitet
+                                        # Metod: om mättnadsgrad > 50% (distinct/read_rows)
+                                        # är linjär extrap. missvisande — kolumnen har troligen
+                                        # ett naturligt tak. Visa istället distinct som minimum.
+                                        _est_total_card = None
+                                        _est_reliable   = True
+                                        if _is_sample and _total_rows and _total_rows > _read_rows:
+                                            _saturation = _distinct / max(_read_rows, 1)
+                                            if _saturation > 0.5:
+                                                # Hög mättnad → linjär extrap. ger för högt värde
+                                                # Bästa estimat: distinct är ett troligt minimum,
+                                                # verklig kardinalitet okänd utan fullständig läsning
+                                                _est_total_card = _distinct  # minimum
+                                                _est_reliable   = False
+                                            else:
+                                                # Låg mättnad → linjär extrap. rimlig
+                                                _est_total_card = int(_distinct / max(_read_rows, 1) * _total_rows)
                                         _card_for_warn = _est_total_card or _distinct
+                                        _card_pct      = _fmt_pct(_card_pct_of_sample)
                                         _rec  = "✅ OK"
                                         _tips = []
 
@@ -3381,21 +3737,47 @@ else:
                                             ]
                                         elif _null_pct > 50:
                                             _rec = "ℹ️ Hög null-frekvens"
+                                        # Exempelvärden — plocka upp till 5 unika icke-null-värden
+                                        try:
+                                            _unique_vals = pc.unique(_arr).to_pylist()
+                                            _sample_vals = [v for v in _unique_vals if v is not None][:5]
+                                            # Komplettera med Delta-logg min/max om tillgängligt
+                                            _dl_min_v = _dl_min.get(_f.name)
+                                            _dl_max_v = _dl_max.get(_f.name)
+                                            if _dl_min_v is not None and str(_dl_min_v) not in [str(v) for v in _sample_vals]:
+                                                _sample_vals = [_dl_min_v] + _sample_vals[:4]
+                                            if _dl_max_v is not None and str(_dl_max_v) not in [str(v) for v in _sample_vals]:
+                                                _sample_vals = _sample_vals[:4] + [_dl_max_v]
+                                            _examples = ", ".join(str(v) for v in _sample_vals[:5])
+                                        except Exception:
+                                            _examples = ""
+
                                         _stats.append({
                                             "Kolumn":                  _f.name,
                                             "Datatyp":                 str(_f.type),
+                                            "Exempelvärden":           _examples,
+                                            "Storlek %":               _size_pct,
                                             "Distinkta (sample)":      _distinct,
-                                            "Kardinalitet %":          _card_pct,
-                                            "Est. total kardinalitet": _est_total_card if _est_total_card else _distinct,
+                                            "Kard% av sample":         _card_pct,
+                                            "Kard% av totalt":         _fmt_pct(_card_pct_of_total),
+                                            "Est. total kardinalitet": (("≥ " if not _est_reliable else "") + f"{(_est_total_card or _distinct):,}") if (_est_total_card or _distinct) else "?",
                                             "Null %":                  _null_pct,
                                             "Rekommendation":          _rec,
                                             "tips":                    _tips,
                                         })
                                     except Exception as _ce:
                                         _stats.append({
-                                            "Kolumn": _f.name, "Datatyp": str(_f.type),
-                                            "Distinkta värden": "?", "Null-värden": "?",
-                                            "Null %": "?", "Rekommendation": f"⚠️ {_ce}",
+                                            "Kolumn":                  _f.name,
+                                            "Datatyp":                 str(_f.type),
+                                            "Exempelvärden":           "",
+                                            "Storlek %":               0,
+                                            "Distinkta (sample)":      "?",
+                                            "Kard% av sample":         "?",
+                                                "Kard% av totalt":         "?",
+                                            "Est. total kardinalitet": "?",
+                                            "Null %":                  "?",
+                                            "Rekommendation":          f"⚠️ {_ce}",
+                                            "tips":                    [],
                                         })
 
                                 _all_analyses[_tbl_full] = {
@@ -3440,9 +3822,9 @@ else:
                     if _ana.get("sample") and _total:
                         _coverage = round(_read / _total * 100, 1)
                         st.caption(
-                            f"📊 Analyserat {_read:,} av {_total:,} rader "
-                            f"(**{_coverage}% täckning**) — "
-                            f"kardinalitet % och estimat baseras på totalt radantal."
+                            f"📊 Stratifierat urval: {_read:,} av {_total:,} rader "
+                            f"(**{_coverage}% täckning**) — rader hämtade jämnt från "
+                            f"alla Parquet-filer för representativt resultat."
                         )
                     elif _ana.get("sample"):
                         st.caption(f"📊 Analyserat {_read:,} rader (totalt okänt)")
@@ -3525,6 +3907,17 @@ else:
 
                     # ── Kolumnstatistik ───────────────────────────────────────
                     _df_s = pd.DataFrame(_ana["stats"])
+                    # Normalisera kolumntyper — "?" ersätts med None för numeriska kolumner
+                    for _num_col in ["Storlek %", "Distinkta (sample)", "Kard% av sample",
+                                     "Kard% av totalt", "Null %"]:
+                        if _num_col in _df_s.columns:
+                            _df_s[_num_col] = pd.to_numeric(_df_s[_num_col], errors="coerce")
+                    # Est. total kardinalitet kan ha "≥ "-prefix — rensa för sortering
+                    if "Est. total kardinalitet" in _df_s.columns:
+                        _df_s["_est_sort"] = _df_s["Est. total kardinalitet"].astype(str).str.replace("≥ ", "").str.replace(",", "")
+                        _df_s["_est_sort"] = pd.to_numeric(_df_s["_est_sort"], errors="coerce")
+                    # tips används bara för varningsexpanders — visa ej i tabell
+                    _df_display = _df_s.drop(columns=["tips"], errors="ignore")
 
                     # Visa Delta-tabellstatistik
                     _dm = _ana.get("delta_meta", {})
@@ -3535,11 +3928,20 @@ else:
                         _dm_cols[2].metric("Snittfilstorlek", f"{_dm.get('avg_file_mb','?')} MB")
                         _dm_cols[3].metric("Rader (Delta-logg)", f"{_dm.get('total_rows',0):,}" if _dm.get('total_rows') else "?")
 
-                    sort_col = "Distinkta (sample)" if "Distinkta (sample)" in _df_s.columns else "Distinkta värden"
+                    sort_col = "_est_sort" if "_est_sort" in _df_s.columns else "Distinkta (sample)"
+                    _col_order = [
+                        "Kolumn", "Rekommendation", "Storlek %", "Distinkta (sample)",
+                        "Kard% av sample", "Kard% av totalt", "Est. total kardinalitet",
+                        "Exempelvärden", "Null %", "Datatyp",
+                    ]
+                    _df_display = _df_s.drop(columns=["tips", "_est_sort", "Kardinalitet %"], errors="ignore")
+                    # Sortera kolumner i önskad ordning
+                    _existing_cols = [c for c in _col_order if c in _df_display.columns]
+                    _extra_cols    = [c for c in _df_display.columns if c not in _col_order]
+                    _df_display    = _df_display[_existing_cols + _extra_cols]
                     st.dataframe(
-                        _df_s.sort_values(sort_col, ascending=False,
-                                          key=lambda x: pd.to_numeric(x, errors="coerce").fillna(0)),
-                        use_container_width=True, height=min(400, 50 + len(_df_s) * 35)
+                        _df_display.iloc[_df_s[sort_col].fillna(0).argsort()[::-1].values],
+                        use_container_width=True, height=min(400, 50 + len(_df_display) * 35)
                     )
 
                     # Debug: visa delta-nycklar om radantal saknas
@@ -3560,15 +3962,16 @@ else:
                         st.markdown("**⚠️ Kolumner som kräver uppmärksamhet:**")
                         for _, _wr in _warns.iterrows():
                             _est = _wr.get("Est. total kardinalitet")
-                            _est_str = f" ~{int(_est):,} uppskattade unika" if _est and isinstance(_est, (int, float)) else ""
+                            _est_str = f" ~{int(str(_est).replace(chr(8805)+chr(32),"").replace(",","").strip() or 0):,} uppskattade unika" if _est and isinstance(_est, (int, float)) else ""
                             with st.expander(
                                 f"⚠️ **{_wr['Kolumn']}** — {_wr['Rekommendation']}{_est_str}",
-                                expanded=True
+                                expanded=False
                             ):
                                 st.caption(
                                     f"Datatyp: `{_wr['Datatyp']}` · "
                                     f"Distinkta (sample): {_wr.get('Distinkta (sample)','?'):,} "
-                                    f"({_wr.get('Kardinalitet %','?')}%) · "
+                                    f"({_wr.get('Kard% av sample','?')}% av sample · "
+                                    f"{_wr.get('Kard% av totalt','?')}% av totalt) · "
                                     f"Null: {_wr.get('Null %','?')}%"
                                 )
                                 _col_tips = _wr.get("tips", [])
@@ -3586,7 +3989,7 @@ else:
                                 _est = _ir.get("Est. total kardinalitet")
                                 st.info(
                                     f"**{_ir['Kolumn']}** (`{_ir['Datatyp']}`): "
-                                    f"~{int(_est):,} uppskattade unika värden" if _est else
+                                    f"~{int(str(_est).replace(chr(8805)+chr(32),"").replace(",","").strip() or 0):,} uppskattade unika värden" if _est else
                                     f"**{_ir['Kolumn']}**: {_ir['Rekommendation']}"
                                 )
                                 for _tip in (_ir.get("tips") or []):

@@ -220,5 +220,48 @@
         }
       ]
     }
+  },
+  "__ws_config__76de0ef2-b022-46e8-b005-42ddf5c4f2e7": {
+    "cluster": "https://trd-mt0m4cmvn1szm8abj0.z5.kusto.fabric.microsoft.com/",
+    "database": "Monitoring Eventhouse"
+  },
+  "76de0ef2-b022-46e8-b005-42ddf5c4f2e7::f3595ef7-c123-46cb-8724-9191839311b6": {
+    "Trafik_buss_v2_parametrar_vanligt_stallda_fragor": {
+      "dax": "DEFINE   VAR __DS0FilterTable =     FILTER(     KEEPFILTERS(VALUES('bus_line_hierarchy'[transportmode_code_agreement])),     AND(      'bus_line_hierarchy'[transportmode_code_agreement] IN {\"{{transportmode_code_agreem}}\"},      'bus_line_hierarchy'[transportmode_code_agreement] IN {\"{{transportmode_code_agreem_1}}\"}     )    )     VAR __DS0FilterTable2 =     FILTER(     KEEPFILTERS(VALUES('bus_traffic_calendardate'[calendar_date])),     AND(      'bus_traffic_calendardate'[calendar_date] >= DATE(2026, 1, 1),      'bus_traffic_calendardate'[calendar_date] < DATE(2026, 1, 2)     )    )     VAR __DS0FilterTable3 =     TREATAS({{{line_number}}}, 'bus_line_hierarchy'[line_number])     VAR __DS0FilterTable4 =     FILTER(     KEEPFILTERS(VALUES('bus_stop_area'[stop_area_name])),     'bus_stop_area'[stop_area_name] <> \"Missing\"    )    EVALUATE   SUMMARIZECOLUMNS(    __DS0FilterTable,    __DS0FilterTable2,    __DS0FilterTable3,    __DS0FilterTable4,    \"count_observed_trips\", IGNORE('_measures'[count_observed_trips]),    \"count_observed_stops\", IGNORE('_measures'[count_observed_stops])   )\n---\nEVALUATE SELECTCOLUMNS(FILTER(VALUES('bus_stop_area'[is_current_stop]),LEN('bus_stop_area'[is_current_stop])<=100),\"valueColumn\",'bus_stop_area'[is_current_stop])\n---\nEVALUATE SELECTCOLUMNS(FILTER(VALUES('bus_line_hierarchy'[transport_authority_organisation_name]),LEN('bus_line_hierarchy'[transport_authority_organisation_name])<=100),\"valueColumn\",'bus_line_hierarchy'[transport_authority_organisation_name])\n---\nEVALUATE SELECTCOLUMNS(FILTER(VALUES('bus_info'[message]),LEN('bus_info'[message])<=100),\"valueColumn\",'bus_info'[message])\n---\nEVALUATE SELECTCOLUMNS(FILTER(VALUES('bus_info'[environment_info]),LEN('bus_info'[environment_info])<=100),\"valueColumn\",'bus_info'[environment_info])\n---\nEVALUATE SELECTCOLUMNS(FILTER(VALUES('bus_line_hierarchy'[foundation_line_yesno]),LEN('bus_line_hierarchy'[foundation_line_yesno])<=100),\"valueColumn\",'bus_line_hierarchy'[foundation_line_yesno])",
+      "rls": {
+        "enabled": false,
+        "mode": "Ingen",
+        "users": []
+      },
+      "mode": "Flera queries (rotation)",
+      "params": [
+        {
+          "name": "line_number",
+          "mode": "Slumpa",
+          "values": [
+            "175",
+            "176",
+            "177"
+          ],
+          "type": "number"
+        },
+        {
+          "name": "transportmode_code_agreem",
+          "mode": "Slumpa",
+          "values": [
+            "BUS"
+          ],
+          "type": "text"
+        },
+        {
+          "name": "transportmode_code_agreem_1",
+          "mode": "Slumpa",
+          "values": [
+            "BUS"
+          ],
+          "type": "text"
+        }
+      ]
+    }
   }
 }
