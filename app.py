@@ -1443,6 +1443,7 @@ def fetch_top_queries_from_logs(
     exclude_session_prefix: str = "test-",
     date_from: str = "",
     date_to: str = "",
+    exclude_strings: list = None,
 ) -> list[dict]:
     """
     Hämtar de N vanligast körda DAX-queries från SemanticModelLogs.
@@ -1558,11 +1559,19 @@ def fetch_top_queries_from_logs(
         summarize_cols += "    AvgCpuMs = round(avg(toreal(CpuTimeMs)), 0),\n"
     if has_exec_user:
         summarize_cols += (
-            "    LastSeen = max(" + col_time + "),\n"
-            "    LastUser = take_any(" + col_exec_user + ")\n"
+            "    LastSeen  = max(" + col_time + "),\n"
+            "    LastUser  = take_any(" + col_exec_user + "),\n"
+            "    LastReport= take_any(_ReportId),\n"
+            "    LastVisual= take_any(_VisualId),\n"
+            "    AppNames  = make_set(_AppName, 10)\n"
         )
     else:
-        summarize_cols += "    LastSeen = max(" + col_time + ")\n"
+        summarize_cols += (
+            "    LastSeen  = max(" + col_time + "),\n"
+            "    LastReport= take_any(_ReportId),\n"
+            "    LastVisual= take_any(_VisualId),\n"
+            "    AppNames  = make_set(_AppName, 10)\n"
+        )
 
     # Session-exkluderingsfilter (exkludera lasttests-sessions)
     session_filter = ""
@@ -1576,6 +1585,15 @@ def fetch_top_queries_from_logs(
             "')\n"
         )
 
+
+    # Fri textexkludering — filtrerar på CleanQuery OCH ExecutingUser
+    exclude_filter = ""
+    for _excl in (exclude_strings or []):
+        _e = _excl.replace("'", "\\'")
+        exclude_filter += (
+            f"| where not(CleanQuery contains '{_e}')\n"
+            f"| where not(tolower({col_exec_user if has_exec_user else '\"\"'}) contains tolower('{_e}'))\n"
+        )
 
     # Datumfilter
     date_filter = ""
@@ -1592,6 +1610,10 @@ def fetch_top_queries_from_logs(
         + date_filter
         + query_extend
         + "| where isnotempty(" + query_col + ")\n"
+        "| extend _AppCtx    = tostring(ApplicationContext)\n"
+        "| extend _ReportId  = tostring(extract_json(\"$.Sources[0].ReportId\",  _AppCtx))\n"
+        "| extend _VisualId  = tostring(extract_json(\"$.Sources[0].VisualId\",   _AppCtx))\n"
+        "| extend _AppName   = tostring(ApplicationName)\n"
         "| extend CleanQuery = replace_regex(\n"
         "    " + query_col + ",\n"
         "    @'VAR _Session[^\\n]*\\n(VAR _ImpersonatedUser[^\\n]*\\n)?(VAR _CorrelationId[^\\n]*\\n)?',\n"
@@ -1607,7 +1629,8 @@ def fetch_top_queries_from_logs(
         "| where CleanQuery !contains \"$SYSTEM\"\n"
         "| where CleanQuery !contains \"__XL_\"\n"
         "| where CleanQuery !contains \"COLUMNTRAITS\"\n"
-        + session_filter +
+        + session_filter
+        + exclude_filter +
         "| summarize\n"
         + summarize_cols +
         "  by CleanQuery\n"
@@ -1616,7 +1639,7 @@ def fetch_top_queries_from_logs(
         "| project CleanQuery, Count, AvgMs, P95Ms, "
         + ("AvgCpuMs, " if has_cpu else "")
         + ("LastUser, " if has_exec_user else "")
-        + "LastSeen\n"
+        + "LastReport, LastVisual, AppNames, LastSeen\n"
     )
 
     body = {
@@ -1653,13 +1676,16 @@ def fetch_top_queries_from_logs(
     for row in rows:
         rec = dict(zip(col_names, row))
         result.append({
-            "query":     rec.get("CleanQuery", ""),
-            "count":     int(rec.get("Count", 0)),
-            "avg_ms":    float(rec.get("AvgMs", 0)),
-            "p95_ms":    float(rec.get("P95Ms", rec.get("AvgMs", 0))),
-            "cpu_ms":    float(rec.get("AvgCpuMs", 0)) if rec.get("AvgCpuMs") else None,
-            "last_user": str(rec.get("LastUser", "")).strip(),
-            "last_seen": str(rec.get("LastSeen", "")),
+            "query":      rec.get("CleanQuery", ""),
+            "count":      int(rec.get("Count", 0)),
+            "avg_ms":     float(rec.get("AvgMs", 0)),
+            "p95_ms":     float(rec.get("P95Ms", rec.get("AvgMs", 0))),
+            "cpu_ms":     float(rec.get("AvgCpuMs", 0)) if rec.get("AvgCpuMs") else None,
+            "last_user":  str(rec.get("LastUser", "")).strip(),
+            "last_seen":  str(rec.get("LastSeen", "")),
+            "report_id":  str(rec.get("LastReport", "")).strip(),
+            "visual_id":  str(rec.get("LastVisual", "")).strip(),
+            "app_names":  rec.get("AppNames", []) or [],
         })
     return result, kql
 
@@ -1746,6 +1772,51 @@ def describe_dax_query(dax: str) -> str:
         parts.append(f"Komplex query med {n_vars} variabler.")
 
     return " ".join(parts) if parts else "Enkel DAX-query utan identifierbara mönster."
+
+
+def lookup_report_name(token: str, report_id: str) -> str:
+    """Slår upp rapportnamn via Power BI REST API."""
+    if not report_id:
+        return ""
+    try:
+        r = requests.get(
+            f"https://api.powerbi.com/v1.0/myorg/reports/{report_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
+        )
+        if r.ok:
+            return r.json().get("name", "")
+    except Exception:
+        pass
+    return ""
+
+
+def lookup_visual_name(token: str, report_id: str, visual_id: str) -> str:
+    """Slår upp visualnamn via Power BI REST API (itererar sidor)."""
+    if not report_id or not visual_id:
+        return ""
+    try:
+        r = requests.get(
+            f"https://api.powerbi.com/v1.0/myorg/reports/{report_id}/pages",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
+        )
+        if not r.ok:
+            return ""
+        for page in r.json().get("value", []):
+            rv = requests.get(
+                f"https://api.powerbi.com/v1.0/myorg/reports/{report_id}"
+                f"/pages/{page.get('name','')}/visuals",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=10,
+            )
+            if rv.ok:
+                for v in rv.json().get("value", []):
+                    if str(v.get("name","")) == visual_id:
+                        return v.get("title", v.get("type", ""))
+    except Exception:
+        pass
+    return ""
 
 
 # ─── Mönsterigenkänning för DAX-queries ──────────────────────────────────────
@@ -2070,6 +2141,11 @@ def cluster_queries_by_pattern(
             "avg_cpu_ms":  (sum(r.get("cpu_ms", 0) * r["count"] for r in recs) / max(sum(r["count"] for r in recs), 1)) or None,
             "last_user":   next((r.get("last_user","") for r in sorted(recs, key=lambda x: x.get("last_seen",""), reverse=True) if r.get("last_user")), ""),
             "last_seen":   max((r.get("last_seen","") for r in recs), default=""),
+            "report_ids":  list(dict.fromkeys(r.get("report_id","") for r in recs if r.get("report_id"))),
+            "visual_ids":  list(dict.fromkeys(r.get("visual_id","") for r in recs if r.get("visual_id"))),
+            "app_names":   list(dict.fromkeys(
+                               a for r in recs for a in (r.get("app_names") or []) if a
+                           )),
             "sample":      qs[0],
         })
 
@@ -2523,6 +2599,18 @@ with st.sidebar:
         key="eh_exclude_prefix",
         help="Queries från lasttester exkluderas automatiskt. Lämna tomt för att inkludera allt.",
     )
+
+    # Fri textexkludering — flera rader, en per rad
+    st.text_area(
+        "Exkludera queries som innehåller (en per rad)",
+        placeholder="anna@sl.se\nSUMMARIZECOLUMNS\nVAR __DS0",
+        key="eh_exclude_strings",
+        height=80,
+        help=(
+            "Filtrerar bort queries där CleanQuery ELLER ExecutingUser innehåller textsträngen. "
+            "Användbart för att exkludera en specifik användare, ett återkommande mönster etc."
+        ),
+    )
     eh_ai_describe = st.toggle(
         "🤖 AI-beskrivning per query",
         value=False,
@@ -2551,9 +2639,9 @@ with st.sidebar:
     )
 
     if fetch_btn:
-        # Rensa gamla AI-beskrivningar när nya queries hämtas
+        # Rensa gamla AI-beskrivningar och namnuppslagningar när nya queries hämtas
         for _k in list(st.session_state.keys()):
-            if _k.startswith("eh_desc_"):
+            if _k.startswith("eh_desc_") or _k.startswith("eh_names_"):
                 del st.session_state[_k]
         with st.spinner("Hämtar och analyserar queries från SemanticModelLogs..."):
             try:
@@ -2569,6 +2657,11 @@ with st.sidebar:
                     exclude_session_prefix = st.session_state.get("eh_exclude_prefix", "test-"),
                     date_from              = str(st.session_state.get("eh_date_from", "")),
                     date_to                = str(st.session_state.get("eh_date_to", "")),
+                    exclude_strings        = [
+                        s.strip() for s in
+                        st.session_state.get("eh_exclude_strings", "").splitlines()
+                        if s.strip()
+                    ],
                 )
                 st.session_state["eh_last_kql"] = generated_kql
                 if fetched:
@@ -2642,6 +2735,48 @@ with st.sidebar:
                         f"Senast kördes av **{_last_user or '?'}**"
                         + (f" · {_last_seen}" if _last_seen else "")
                     )
+
+                # Ursprung — rapport, visual och applikation
+                _report_ids = cl.get("report_ids", [])
+                _visual_ids = cl.get("visual_ids", [])
+                _app_names  = cl.get("app_names", [])
+                if _report_ids or _visual_ids or _app_names:
+                    _orig_parts = []
+                    if _app_names:
+                        _orig_parts.append(f"**Applikation:** {', '.join(_app_names[:3])}")
+
+                    # Slå upp namn om vi har token
+                    _name_key = f"eh_names_{idx}"
+                    if _report_ids:
+                        _rname = st.session_state.get(_name_key, {}).get("report", "")
+                        _vname = st.session_state.get(_name_key, {}).get("visual", "")
+                        _rid   = _report_ids[0]
+                        _vid   = _visual_ids[0] if _visual_ids else ""
+
+                        _rid_display = _rname if _rname else f"`{_rid}`"
+                        _vid_display = _vname if _vname else (f"`{_vid}`" if _vid else "")
+
+                        _orig_parts.append(
+                            f"**Rapport:** {_rid_display}" +
+                            (f" (+{len(_report_ids)-1})" if len(_report_ids) > 1 else "")
+                        )
+                        if _vid_display:
+                            _orig_parts.append(f"**Visual:** {_vid_display}")
+
+                        if not _rname and st.button(
+                            "🔍 Slå upp namn", key=f"eh_lookup_{idx}", width="stretch"
+                        ):
+                            _tok = st.session_state.get("_last_token", "")
+                            if _tok:
+                                with st.spinner("Slår upp..."):
+                                    _rn = lookup_report_name(_tok, _rid)
+                                    _vn = lookup_visual_name(_tok, _rid, _vid) if _vid else ""
+                                    st.session_state[_name_key] = {"report": _rn, "visual": _vn}
+                                st.rerun()
+                            else:
+                                st.warning("Power BI-token saknas — hämta tokens via autentiseringssektionen.")
+
+                    st.caption(" · ".join(_orig_parts))
 
                 # Visa föreslagna parametrar
                 if cl["params"]:

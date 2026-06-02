@@ -263,5 +263,50 @@
         }
       ]
     }
+  },
+  "__ws_config__59867f57-f836-4388-b44b-919a61e3dd21": {
+    "cluster": "https://trd-1nn2c63dpz8p245e20.z0.kusto.fabric.microsoft.com",
+    "database": "Monitoring Eventhouse"
+  },
+  "59867f57-f836-4388-b44b-919a61e3dd21::2e60d95a-45da-4ed3-a756-deb2c50f13ce": {
+    "Validering_tung_dax": {
+      "dax": "DEFINE   VAR __DS0FilterTable =     TREATAS(     {\"{{apparatplatstyp}}\"},     'Apparatplats'[Apparatplatstyp]    )     VAR __DS0FilterTable2 =     TREATAS({\"{{entreprenor_avtal}}\"}, 'Linje, hierarki'[Entreprenör, avtal])     VAR __DS0FilterTable3 =     FILTER(     KEEPFILTERS(VALUES('Kalenderdygn'[Kalenderdygn])),     AND(      AND(       'Kalenderdygn'[Kalenderdygn] >= DATE(2026, 1, 1),       'Kalenderdygn'[Kalenderdygn] >= DATE(2024, 5, 19)      ),      'Kalenderdygn'[Kalenderdygn] < DATE(2026, 5, 19)     )    )     VAR __DM3FilterTable =     TREATAS({\"{{entreprenor_avtal_1}}\"}, 'Linje, hierarki'[Entreprenör, avtal])     VAR __DM5FilterTable =     TREATAS(     {(\"Keolis\", 2025),      (\"Keolis\", 2026)},     'Linje, hierarki'[Entreprenör, avtal],     'Kalenderdygn'[År]    )     VAR __DM7FilterTable =     TREATAS(     {(\"Keolis\", 2026, \"2026-03\"),      (\"Keolis\", 2026, \"2026-02\"),      (\"Keolis\", 2026, \"2026-01\")},     'Linje, hierarki'[Entreprenör, avtal],     'Kalenderdygn'[År],     'Kalenderdygn'[År månad]    )     VAR __DS0Core =     SUMMARIZECOLUMNS(     ROLLUPADDISSUBTOTAL(      'Linje, hierarki'[Entreprenör, avtal], \"IsGrandTotalRowTotal\",      'Kalenderdygn'[År], \"IsDM1Total\", NONVISUAL(__DM3FilterTable),      'Kalenderdygn'[År månad],      \"IsDM3Total\",      NONVISUAL(__DM3FilterTable),      NONVISUAL(__DM5FilterTable),      'Status Trafikmatchning'[Status fordonsmatchning],      \"IsDM5Total\",      NONVISUAL(__DM3FilterTable),      NONVISUAL(__DM5FilterTable),      NONVISUAL(__DM7FilterTable),      'Apparatplats'[Apparatplatstyp],      \"IsDM7Total\",      NONVISUAL(__DM3FilterTable),      NONVISUAL(__DM5FilterTable),      NONVISUAL(__DM7FilterTable)     ),     ROLLUPADDISSUBTOTAL('Linje, hierarki'[Avtalsområde], \"IsGrandTotalColumnTotal\"),     __DS0FilterTable,     __DS0FilterTable2,     __DS0FilterTable3,     \"Antal_valideringar_agg\", '_measures'[Antal valideringar agg]    )     VAR __DS0PrimaryWindowed =     TOPN(     102,     SUMMARIZE(      __DS0Core,      'Linje, hierarki'[Entreprenör, avtal],      [IsGrandTotalRowTotal],      'Kalenderdygn'[År],      [IsDM1Total],      'Kalenderdygn'[År månad],      [IsDM3Total],      'Status Trafikmatchning'[Status fordonsmatchning],      [IsDM5Total],      'Apparatplats'[Apparatplatstyp],      [IsDM7Total]     ),     [IsGrandTotalRowTotal],     0,     'Linje, hierarki'[Entreprenör, avtal],     1,     [IsDM1Total],     0,     'Kalenderdygn'[År],     1,     [IsDM3Total],     0,     'Kalenderdygn'[År månad],     1,     [IsDM5Total],     0,     'Status Trafikmatchning'[Status fordonsmatchning],     1,     [IsDM7Total],     0,     'Apparatplats'[Apparatplatstyp],     1    )     VAR __DS0SecondaryBase =     SUMMARIZE(__DS0Core, 'Linje, hierarki'[Avtalsområde], [IsGrandTotalColumnTotal])     VAR __DS0Secondary =     TOPN(102, __DS0SecondaryBase, [IsGrandTotalColumnTotal], 1, 'Linje, hierarki'[Avtalsområde], 1)     VAR __DS0BodyLimited =     NATURALLEFTOUTERJOIN(     __DS0PrimaryWindowed,     SUBSTITUTEWITHINDEX(      __DS0Core,      \"ColumnIndex\",      __DS0Secondary,      [IsGrandTotalColumnTotal],      ASC,      'Linje, hierarki'[Avtalsområde],      ASC     )    )    EVALUATE   __DS0Secondary    ORDER BY   [IsGrandTotalColumnTotal], 'Linje, hierarki'[Avtalsområde]    EVALUATE   __DS0BodyLimited    ORDER BY   [IsGrandTotalRowTotal] DESC,   'Linje, hierarki'[Entreprenör, avtal],   [IsDM1Total] DESC,   'Kalenderdygn'[År],   [IsDM3Total] DESC,   'Kalenderdygn'[År månad],   [IsDM5Total] DESC,   'Status Trafikmatchning'[Status fordonsmatchning],   [IsDM7Total] DESC,   'Apparatplats'[Apparatplatstyp],   [ColumnIndex]",
+      "rls": {
+        "enabled": false,
+        "mode": "Ingen",
+        "users": []
+      },
+      "mode": "Enkel query",
+      "params": [
+        {
+          "name": "apparatplatstyp",
+          "mode": "Slumpa",
+          "values": [
+            "Bärbar Biljett Utrustning",
+            "BKU 2",
+            "BKU 3",
+            "Bussvalidator",
+            "Missing"
+          ],
+          "type": "text"
+        },
+        {
+          "name": "entreprenor_avtal",
+          "mode": "Slumpa",
+          "values": [
+            "Keolis"
+          ],
+          "type": "text"
+        },
+        {
+          "name": "entreprenor_avtal_1",
+          "mode": "Slumpa",
+          "values": [
+            "Keolis"
+          ],
+          "type": "text"
+        }
+      ]
+    }
   }
 }
