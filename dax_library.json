@@ -308,5 +308,424 @@
         }
       ]
     }
+  },
+  "76de0ef2-b022-46e8-b005-42ddf5c4f2e7::187b7f28-26cc-4dec-a7e7-5f5b712b3657": {
+    "Lasttest-rapportsekvens-parametersatt": {
+      "dax": "DEFINE\n    VAR __DS0FilterTable =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_trafficdate'[daygroup_name]\n        )\n    VAR __DS0FilterTable2 =\n        TREATAS ( { 2 }, 'bus_line_direction_variant_number'[line_direction] )\n    VAR __DS0FilterTable4 =\n        TREATAS (\n            { 0.90000000000000013 },\n            'percentile_percentage'[percentile_percentage]\n        )\n    VAR __DS0FilterTable5 =\n        TREATAS ( { 0, BLANK () }, 'bus_departure'[is_journey_failed] )\n    VAR __DS0FilterTable6 =\n        TREATAS (\n            { ( \"{{line_description}}\" ) },\n            'bus_line_hierarchy'[line_description]\n        )\n    VAR __DS0FilterTable7 =\n        TREATAS (\n            { ( {{year_month_sort}} ) },\n            'bus_traffic_trafficdate'[year_month_sort]\n        )\n    VAR __DS0FilterTable8 =\n        TREATAS (\n            {\n                ( \"Resor\", \"'_measures'[max_trip_onboard_balanced_max_acc]\" ),\n                ( \"Resor\", \"'_measures'[pct_trip_onboard_balanced_max_acc]\" )\n            },\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur kategori],\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur field]\n        )\n    VAR __DS0Core =\n        SUMMARIZECOLUMNS (\n            'bus_line_hierarchy'[line_description],\n            'bus_line_direction_variant_number'[line_direction],\n            'bus_stops_observed_imputed'[stop_sequence_number],\n            'bus_stop_point'[stop_point_name],\n            __DS0FilterTable,\n            __DS0FilterTable2,\n            __DS0FilterTable4,\n            __DS0FilterTable5,\n            __DS0FilterTable6,\n            __DS0FilterTable7,\n            __DS0FilterTable8,\n            \"count_observed_departures\", '_measures'[count_observed_departures]\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN (\n            501,\n            __DS0Core,\n            'bus_line_hierarchy'[line_description], 1,\n            'bus_line_direction_variant_number'[line_direction], 1,\n            'bus_stops_observed_imputed'[stop_sequence_number], 1,\n            'bus_stop_point'[stop_point_name], 0\n        )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY\n    'bus_line_hierarchy'[line_description],\n    'bus_line_direction_variant_number'[line_direction],\n    'bus_stops_observed_imputed'[stop_sequence_number],\n    'bus_stop_point'[stop_point_name] DESC\n---\nDEFINE\n    VAR __DS0FilterTable =\n        TREATAS ( { \"hh:mm:ss\" }, 'Tidsformat'[Formatera sekunder som...] )\n    VAR __DS0FilterTable2 =\n        TREATAS (\n            { \"Genomsnitt exkl. avgångar & stopp\" },\n            'Trafiktur aggregat exkl. avgångar & stopp'[Beräkna trafikturens...]\n        )\n    VAR __DS0FilterTable3 =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_trafficdate'[daygroup_name]\n        )\n    VAR __DS0FilterTable4 =\n        TREATAS ( { 2 }, 'bus_line_direction_variant_number'[line_direction] )\n    VAR __DS0FilterTable5 =\n        TREATAS (\n            { 0.90000000000000013 },\n            'percentile_percentage'[percentile_percentage]\n        )\n    VAR __DS0FilterTable6 =\n        TREATAS ( { 0, BLANK () }, 'bus_departure'[is_journey_failed] )\n    VAR __DS0FilterTable7 =\n        TREATAS (\n            { ( \"{{line_description}}\" ) },\n            'bus_line_hierarchy'[line_description]\n        )\n    VAR __DS0FilterTable8 =\n        TREATAS (\n            { ( {{year_month_sort}} ) },\n            'bus_traffic_trafficdate'[year_month_sort]\n        )\n    VAR __DS0FilterTable9 =\n        TREATAS (\n            {\n                ( \"Resor\", \"'_measures'[max_trip_onboard_balanced_max_acc]\" ),\n                ( \"Resor\", \"'_measures'[pct_trip_onboard_balanced_max_acc]\" ),\n                ( \"Trafikturer\", \"'_measures'[count_trips]\" )\n            },\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur kategori],\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur field]\n        )\n    VAR __DS0Core =\n        SUMMARIZECOLUMNS (\n            ROLLUPADDISSUBTOTAL (\n                'bus_line_hierarchy'[line_description],\n                \"IsGrandTotalRowTotal\",\n                'bus_line_direction_variant_number'[line_direction],\n                \"IsDM1Total\",\n                'bus_time'[hour_minute_formatted],\n                \"IsDM3Total\"\n            ),\n            __DS0FilterTable,\n            __DS0FilterTable2,\n            __DS0FilterTable3,\n            __DS0FilterTable4,\n            __DS0FilterTable5,\n            __DS0FilterTable6,\n            __DS0FilterTable7,\n            __DS0FilterTable8,\n            __DS0FilterTable9,\n            \"max_trip_onboard_balanced_max_acc\", '_measures'[max_trip_onboard_balanced_max_acc],\n            \"pct_trip_onboard_balanced_max_acc\", '_measures'[pct_trip_onboard_balanced_max_acc],\n            \"count_trips\", '_measures'[count_trips]\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN (\n            502,\n            __DS0Core,\n            [IsGrandTotalRowTotal], 0,\n            'bus_line_hierarchy'[line_description], 1,\n            [IsDM1Total], 0,\n            'bus_line_direction_variant_number'[line_direction], 1,\n            [IsDM3Total], 0,\n            'bus_time'[hour_minute_formatted], 1\n        )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY\n    [IsGrandTotalRowTotal] DESC,\n    'bus_line_hierarchy'[line_description],\n    [IsDM1Total] DESC,\n    'bus_line_direction_variant_number'[line_direction],\n    [IsDM3Total] DESC,\n    'bus_time'[hour_minute_formatted]\n---\nDEFINE\n    VAR __DS0FilterTable =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_trafficdate'[daygroup_name]\n        )\n    VAR __DS0FilterTable2 =\n        TREATAS ( { 2 }, 'bus_line_direction_variant_number'[line_direction] )\n    VAR __DS0FilterTable3 =\n        TREATAS (\n            { 0.90000000000000013 },\n            'percentile_percentage'[percentile_percentage]\n        )\n    VAR __DS0FilterTable4 =\n        TREATAS ( { 0, BLANK () }, 'bus_departure'[is_journey_failed] )\n    VAR __DS0FilterTable5 =\n        FILTER (\n            KEEPFILTERS (\n                SUMMARIZE (\n                    VALUES ( 'bus_line_hierarchy' ),\n                    'bus_line_hierarchy'[contract_name],\n                    'bus_line_hierarchy'[line_description]\n                )\n            ),\n            OR (\n                SEARCH ( \"{{search_line_description}}\", 'bus_line_hierarchy'[contract_name], 1, 0 ) >= 1,\n                SEARCH ( \"{{search_line_description}}\", 'bus_line_hierarchy'[line_description], 1, 0 ) >= 1\n            )\n        )\n    VAR __DS0FilterTable6 =\n        TREATAS (\n            { ( {{year_month_sort}} ) },\n            'bus_traffic_trafficdate'[year_month_sort]\n        )\n    VAR __DS0FilterTable7 =\n        TREATAS (\n            {\n                ( \"Resor\", \"'_measures'[max_trip_onboard_balanced_max_acc]\" ),\n                ( \"Resor\", \"'_measures'[pct_trip_onboard_balanced_max_acc]\" )\n            },\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur kategori],\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur field]\n        )\n    VAR __DM3FilterTable =\n        TREATAS (\n            { \"Tyresö\", \"Grön linje\", \"Solna/Sundbyberg\", \"Innerstaden\" },\n            'bus_line_hierarchy'[contract_name]\n        )\n    VAR __ValueFilterDM3 =\n        FILTER (\n            KEEPFILTERS (\n                CALCULATETABLE (\n                    ADDCOLUMNS (\n                        KEEPFILTERS (\n                            SUMMARIZE (\n                                VALUES ( 'bus_line_hierarchy' ),\n                                'bus_line_hierarchy'[contract_name],\n                                'bus_line_hierarchy'[line_description]\n                            )\n                        ),\n                        \"count_trips\", '_measures'[count_trips]\n                    ),\n                    KEEPFILTERS ( __DS0FilterTable ),\n                    KEEPFILTERS ( __DS0FilterTable2 ),\n                    KEEPFILTERS ( __DS0FilterTable3 ),\n                    KEEPFILTERS ( __DS0FilterTable4 ),\n                    KEEPFILTERS ( __DS0FilterTable5 ),\n                    KEEPFILTERS ( __DS0FilterTable6 ),\n                    KEEPFILTERS ( __DS0FilterTable7 )\n                )\n            ),\n            NOT ( ISBLANK ( [count_trips] ) )\n        )\n    VAR __DS0Core =\n        SELECTCOLUMNS (\n            KEEPFILTERS (\n                SUMMARIZECOLUMNS (\n                    ROLLUPADDISSUBTOTAL (\n                        'bus_line_hierarchy'[contract_name],\n                        \"IsGrandTotalRowTotal\",\n                        'bus_line_hierarchy'[line_description],\n                        \"IsDM1Total\",\n                        NONVISUAL ( __DM3FilterTable )\n                    ),\n                    __DS0FilterTable,\n                    __DS0FilterTable2,\n                    __DS0FilterTable3,\n                    __DS0FilterTable4,\n                    __DS0FilterTable5,\n                    __DS0FilterTable6,\n                    __DS0FilterTable7,\n                    __ValueFilterDM3,\n                    \"CountRowsbus_line_hierarchy\", COUNTROWS ( 'bus_line_hierarchy' )\n                )\n            ),\n            \"'bus_line_hierarchy'[contract_name]\", 'bus_line_hierarchy'[contract_name],\n            \"'bus_line_hierarchy'[line_description]\", 'bus_line_hierarchy'[line_description],\n            \"IsGrandTotalRowTotal\", [IsGrandTotalRowTotal],\n            \"IsDM1Total\", [IsDM1Total]\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN (\n            502,\n            __DS0Core,\n            [IsGrandTotalRowTotal], 0,\n            'bus_line_hierarchy'[contract_name], 1,\n            [IsDM1Total], 0,\n            'bus_line_hierarchy'[line_description], 1\n        )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY\n    [IsGrandTotalRowTotal] DESC,\n    'bus_line_hierarchy'[contract_name],\n    [IsDM1Total] DESC,\n    'bus_line_hierarchy'[line_description]\n---\nDEFINE\n    VAR __DS0FilterTable =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_trafficdate'[daygroup_name]\n        )\n    VAR __DS0FilterTable2 =\n        TREATAS (\n            { 0.90000000000000013 },\n            'percentile_percentage'[percentile_percentage]\n        )\n    VAR __DS0FilterTable3 =\n        TREATAS ( { 0, BLANK () }, 'bus_departure'[is_journey_failed] )\n    VAR __DS0FilterTable4 =\n        TREATAS (\n            { ( \"{{line_description}}\" ) },\n            'bus_line_hierarchy'[line_description]\n        )\n    VAR __DS0FilterTable5 =\n        TREATAS (\n            { ( 1, 1 ) },\n            'bus_line_direction_variant_number'[line_direction],\n            'bus_line_direction_variant_number'[variant_number]\n        )\n    VAR __DS0FilterTable6 =\n        TREATAS (\n            { ( {{year_month_sort}} ) },\n            'bus_traffic_trafficdate'[year_month_sort]\n        )\n    VAR __DS0FilterTable7 =\n        TREATAS (\n            {\n                ( \"Resor\", \"'_measures'[avg_trip_onboard_balanced_max_acc]\" ),\n                ( \"Trafikturer\", \"'_measures'[count_planned_trips]\" ),\n                ( \"Trafikturer\", \"'_measures'[count_trips]\" )\n            },\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur kategori],\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur field]\n        )\n    VAR __DS0Core =\n        FILTER (\n            KEEPFILTERS (\n                CALCULATETABLE (\n                    ADDCOLUMNS (\n                        KEEPFILTERS ( VALUES ( 'bus_stop_point'[stop_point_name] ) ),\n                        \"count_trips\", '_measures'[count_trips]\n                    ),\n                    KEEPFILTERS ( __DS0FilterTable ),\n                    KEEPFILTERS ( __DS0FilterTable2 ),\n                    KEEPFILTERS ( __DS0FilterTable3 ),\n                    KEEPFILTERS ( __DS0FilterTable4 ),\n                    KEEPFILTERS ( __DS0FilterTable5 ),\n                    KEEPFILTERS ( __DS0FilterTable6 ),\n                    KEEPFILTERS ( __DS0FilterTable7 )\n                )\n            ),\n            NOT ( ISBLANK ( [count_trips] ) )\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN ( 101, __DS0Core, 'bus_stop_point'[stop_point_name], 1 )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY 'bus_stop_point'[stop_point_name]\n---\nDEFINE\n    VAR __DS0FilterTable =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_trafficdate'[daygroup_name]\n        )\n    VAR __DS0FilterTable2 =\n        TREATAS ( { 2 }, 'bus_line_direction_variant_number'[line_direction] )\n    VAR __DS0FilterTable3 =\n        TREATAS (\n            { 0.90000000000000013 },\n            'percentile_percentage'[percentile_percentage]\n        )\n    VAR __DS0FilterTable4 =\n        TREATAS ( { 0, BLANK () }, 'bus_departure'[is_journey_failed] )\n    VAR __DS0FilterTable5 =\n        TREATAS (\n            { ( \"{{line_description}}\" ) },\n            'bus_line_hierarchy'[line_description]\n        )\n    VAR __DS0FilterTable6 =\n        TREATAS (\n            { ( {{year_month_sort}} ) },\n            'bus_traffic_trafficdate'[year_month_sort]\n        )\n    VAR __DS0FilterTable7 =\n        TREATAS (\n            {\n                ( \"Resor\", \"'_measures'[pct_trip_onboard_balanced_max_acc]\" ),\n                ( \"Tider\", \"'_measures'[pct_trip_run_time_since_last_stop_and_stop_time_minus_first_acc_s]\" ),\n                ( \"Trafikturer\", \"'_measures'[count_trips]\" )\n            },\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur kategori],\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur field]\n        )\n    VAR __DM3FilterTable =\n        TREATAS ( { \"{{departure_pattern}}\" }, 'bus_traffic_period'[departure_pattern] )\n    VAR __ValueFilterDM6 =\n        FILTER (\n            KEEPFILTERS (\n                CALCULATETABLE (\n                    ADDCOLUMNS (\n                        KEEPFILTERS (\n                            SUMMARIZE (\n                                VALUES ( 'bus_traffic_period' ),\n                                'bus_traffic_period'[departure_pattern],\n                                'bus_traffic_period'[headtimetable_period_code],\n                                'bus_traffic_period'[traffic_period_from]\n                            )\n                        ),\n                        \"count_trips\", '_measures'[count_trips]\n                    ),\n                    KEEPFILTERS ( __DS0FilterTable ),\n                    KEEPFILTERS ( __DS0FilterTable2 ),\n                    KEEPFILTERS ( __DS0FilterTable3 ),\n                    KEEPFILTERS ( __DS0FilterTable4 ),\n                    KEEPFILTERS ( __DS0FilterTable5 ),\n                    KEEPFILTERS ( __DS0FilterTable6 ),\n                    KEEPFILTERS ( __DS0FilterTable7 )\n                )\n            ),\n            NOT ( ISBLANK ( [count_trips] ) )\n        )\n    VAR __DS0Core =\n        SELECTCOLUMNS (\n            KEEPFILTERS (\n                SUMMARIZECOLUMNS (\n                    ROLLUPADDISSUBTOTAL (\n                        'bus_traffic_period'[departure_pattern],\n                        \"IsGrandTotalRowTotal\",\n                        'bus_traffic_period'[headtimetable_period_code],\n                        \"IsDM1Total\",\n                        NONVISUAL ( __DM3FilterTable )\n                    ),\n                    __DS0FilterTable,\n                    __DS0FilterTable2,\n                    __DS0FilterTable3,\n                    __DS0FilterTable4,\n                    __DS0FilterTable5,\n                    __DS0FilterTable6,\n                    __DS0FilterTable7,\n                    __ValueFilterDM6,\n                    \"CountRowsbus_traffic_period\", COUNTROWS ( 'bus_traffic_period' )\n                )\n            ),\n            \"'bus_traffic_period'[departure_pattern]\", 'bus_traffic_period'[departure_pattern],\n            \"'bus_traffic_period'[headtimetable_period_code]\", 'bus_traffic_period'[headtimetable_period_code],\n            \"IsGrandTotalRowTotal\", [IsGrandTotalRowTotal],\n            \"IsDM1Total\", [IsDM1Total]\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN (\n            502,\n            __DS0Core,\n            [IsGrandTotalRowTotal], 0,\n            'bus_traffic_period'[departure_pattern], 1,\n            [IsDM1Total], 0,\n            'bus_traffic_period'[headtimetable_period_code], 1\n        )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY\n    [IsGrandTotalRowTotal] DESC,\n    'bus_traffic_period'[departure_pattern],\n    [IsDM1Total] DESC,\n    'bus_traffic_period'[headtimetable_period_code]\n---\nDEFINE\n    VAR __DS0FilterTable =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_trafficdate'[daygroup_name]\n        )\n    VAR __DS0FilterTable2 =\n        TREATAS (\n            { 0.90000000000000013 },\n            'percentile_percentage'[percentile_percentage]\n        )\n    VAR __DS0FilterTable3 =\n        TREATAS ( { 0, BLANK () }, 'bus_departure'[is_journey_failed] )\n    VAR __DS0FilterTable4 =\n        TREATAS (\n            { ( \"{{line_description}}\" ) },\n            'bus_line_hierarchy'[line_description]\n        )\n    VAR __DS0FilterTable5 =\n        TREATAS (\n            { ( {{year_month_sort}} ) },\n            'bus_traffic_trafficdate'[year_month_sort]\n        )\n    VAR __DS0FilterTable6 =\n        TREATAS (\n            {\n                ( \"Resor\", \"'_measures'[pct_trip_onboard_balanced_max_acc]\" ),\n                ( \"Tider\", \"'_measures'[pct_trip_run_time_since_last_stop_and_stop_time_minus_first_acc_s]\" ),\n                ( \"Trafikturer\", \"'_measures'[count_trips]\" )\n            },\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur kategori],\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur field]\n        )\n    VAR __DM3FilterTable =\n        TREATAS ( { 2, 1 }, 'bus_line_direction_variant_number'[line_direction] )\n    VAR __ValueFilterDM3 =\n        FILTER (\n            KEEPFILTERS (\n                CALCULATETABLE (\n                    ADDCOLUMNS (\n                        KEEPFILTERS (\n                            SUMMARIZE (\n                                VALUES ( 'bus_line_direction_variant_number' ),\n                                'bus_line_direction_variant_number'[line_direction],\n                                'bus_line_direction_variant_number'[variant_number]\n                            )\n                        ),\n                        \"count_trips\", '_measures'[count_trips]\n                    ),\n                    KEEPFILTERS ( __DS0FilterTable ),\n                    KEEPFILTERS ( __DS0FilterTable2 ),\n                    KEEPFILTERS ( __DS0FilterTable3 ),\n                    KEEPFILTERS ( __DS0FilterTable4 ),\n                    KEEPFILTERS ( __DS0FilterTable5 ),\n                    KEEPFILTERS ( __DS0FilterTable6 )\n                )\n            ),\n            NOT ( ISBLANK ( [count_trips] ) )\n        )\n    VAR __DS0Core =\n        SELECTCOLUMNS (\n            KEEPFILTERS (\n                SUMMARIZECOLUMNS (\n                    ROLLUPADDISSUBTOTAL (\n                        'bus_line_direction_variant_number'[line_direction],\n                        \"IsGrandTotalRowTotal\",\n                        'bus_line_direction_variant_number'[variant_number],\n                        \"IsDM1Total\",\n                        NONVISUAL ( __DM3FilterTable )\n                    ),\n                    __DS0FilterTable,\n                    __DS0FilterTable2,\n                    __DS0FilterTable3,\n                    __DS0FilterTable4,\n                    __DS0FilterTable5,\n                    __DS0FilterTable6,\n                    __ValueFilterDM3,\n                    \"CountRowsbus_line_direction_variant_number\", COUNTROWS ( 'bus_line_direction_variant_number' )\n                )\n            ),\n            \"'bus_line_direction_variant_number'[line_direction]\", 'bus_line_direction_variant_number'[line_direction],\n            \"'bus_line_direction_variant_number'[variant_number]\", 'bus_line_direction_variant_number'[variant_number],\n            \"IsGrandTotalRowTotal\", [IsGrandTotalRowTotal],\n            \"IsDM1Total\", [IsDM1Total]\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN (\n            502,\n            __DS0Core,\n            [IsGrandTotalRowTotal], 0,\n            'bus_line_direction_variant_number'[line_direction], 1,\n            [IsDM1Total], 0,\n            'bus_line_direction_variant_number'[variant_number], 1\n        )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY\n    [IsGrandTotalRowTotal] DESC,\n    'bus_line_direction_variant_number'[line_direction],\n    [IsDM1Total] DESC,\n    'bus_line_direction_variant_number'[variant_number]\n---\nDEFINE\n    VAR __DS0FilterTable =\n        TREATAS ( { 2024, 2025, 2026, 2027 }, 'bus_traffic_trafficdate'[year] )\n    VAR __DS0FilterTable2 =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_trafficdate'[daygroup_name]\n        )\n    VAR __DS0FilterTable3 =\n        TREATAS (\n            { 0.90000000000000013 },\n            'percentile_percentage'[percentile_percentage]\n        )\n    VAR __DS0FilterTable4 =\n        TREATAS ( { 0, BLANK () }, 'bus_departure'[is_journey_failed] )\n    VAR __DS0FilterTable5 =\n        TREATAS (\n            { ( \"{{line_description}}\" ) },\n            'bus_line_hierarchy'[line_description]\n        )\n    VAR __DS0FilterTable6 =\n        TREATAS (\n            { ( 1, 1 ) },\n            'bus_line_direction_variant_number'[line_direction],\n            'bus_line_direction_variant_number'[variant_number]\n        )\n    VAR __DS0FilterTable7 =\n        TREATAS (\n            {\n                ( \"Resor\", \"'_measures'[avg_trip_onboard_balanced_max_acc]\" ),\n                ( \"Trafikturer\", \"'_measures'[count_planned_trips]\" ),\n                ( \"Trafikturer\", \"'_measures'[count_trips]\" )\n            },\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur kategori],\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur field]\n        )\n    VAR __DM3FilterTable =\n        TREATAS ( { 2026, 2025, 2024 }, 'bus_traffic_trafficdate'[year] )\n    VAR __DM5FilterTable =\n        TREATAS (\n            { ( {{year_month_sort}} ) },\n            'bus_traffic_trafficdate'[year_month_sort]\n        )\n    VAR __DS0Core =\n        SUMMARIZECOLUMNS (\n            ROLLUPADDISSUBTOTAL (\n                'bus_traffic_trafficdate'[year],\n                \"IsGrandTotalRowTotal\",\n                ROLLUPGROUP (\n                    'bus_traffic_trafficdate'[year_month],\n                    'bus_traffic_trafficdate'[year_month_sort]\n                ),\n                \"IsDM1Total\",\n                NONVISUAL ( __DM3FilterTable ),\n                ROLLUPGROUP (\n                    'bus_traffic_trafficdate'[year_week],\n                    'bus_traffic_trafficdate'[year_week_sort]\n                ),\n                \"IsDM3Total\",\n                NONVISUAL ( __DM3FilterTable ),\n                NONVISUAL ( __DM5FilterTable )\n            ),\n            __DS0FilterTable,\n            __DS0FilterTable2,\n            __DS0FilterTable3,\n            __DS0FilterTable4,\n            __DS0FilterTable5,\n            __DS0FilterTable6,\n            __DS0FilterTable7\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN (\n            502,\n            __DS0Core,\n            [IsGrandTotalRowTotal], 0,\n            'bus_traffic_trafficdate'[year], 1,\n            [IsDM1Total], 0,\n            'bus_traffic_trafficdate'[year_month_sort], 1,\n            'bus_traffic_trafficdate'[year_month], 1,\n            [IsDM3Total], 0,\n            'bus_traffic_trafficdate'[year_week_sort], 1,\n            'bus_traffic_trafficdate'[year_week], 1\n        )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY\n    [IsGrandTotalRowTotal] DESC,\n    'bus_traffic_trafficdate'[year],\n    [IsDM1Total] DESC,\n    'bus_traffic_trafficdate'[year_month_sort],\n    'bus_traffic_trafficdate'[year_month],\n    [IsDM3Total] DESC,\n    'bus_traffic_trafficdate'[year_week_sort],\n    'bus_traffic_trafficdate'[year_week]\n---\nDEFINE\n    VAR __DS0FilterTable =\n        TREATAS (\n            { 0.90000000000000013 },\n            'percentile_percentage'[percentile_percentage]\n        )\n    VAR __DS0FilterTable2 =\n        TREATAS ( { 0, BLANK () }, 'bus_departure'[is_journey_failed] )\n    VAR __DS0FilterTable3 =\n        TREATAS (\n            { ( \"{{line_description}}\" ) },\n            'bus_line_hierarchy'[line_description]\n        )\n    VAR __DS0FilterTable4 =\n        TREATAS (\n            { ( 1, 1 ) },\n            'bus_line_direction_variant_number'[line_direction],\n            'bus_line_direction_variant_number'[variant_number]\n        )\n    VAR __DS0FilterTable5 =\n        TREATAS (\n            { ( {{year_month_sort}} ) },\n            'bus_traffic_trafficdate'[year_month_sort]\n        )\n    VAR __DS0FilterTable6 =\n        TREATAS (\n            {\n                ( \"Resor\", \"'_measures'[max_trip_onboard_balanced_max_acc]\" ),\n                ( \"Resor\", \"'_measures'[pct_trip_onboard_balanced_max_acc]\" ),\n                ( \"Trafikturer\", \"'_measures'[count_trips]\" )\n            },\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur kategori],\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur field]\n        )\n    VAR __DS0Core =\n        CALCULATETABLE (\n            SUMMARIZE (\n                VALUES ( 'bus_traffic_trafficdate' ),\n                'bus_traffic_trafficdate'[daygroup_name],\n                'bus_traffic_trafficdate'[daygroup_sort]\n            ),\n            KEEPFILTERS ( __DS0FilterTable ),\n            KEEPFILTERS ( __DS0FilterTable2 ),\n            KEEPFILTERS ( __DS0FilterTable3 ),\n            KEEPFILTERS ( __DS0FilterTable4 ),\n            KEEPFILTERS ( __DS0FilterTable5 ),\n            KEEPFILTERS ( __DS0FilterTable6 )\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN (\n            101,\n            __DS0Core,\n            'bus_traffic_trafficdate'[daygroup_sort], 1,\n            'bus_traffic_trafficdate'[daygroup_name], 1\n        )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY\n    'bus_traffic_trafficdate'[daygroup_sort],\n    'bus_traffic_trafficdate'[daygroup_name]\n---\nDEFINE\n    VAR __DS0FilterTable =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_trafficdate'[daygroup_name]\n        )\n    VAR __DS0FilterTable2 =\n        TREATAS ( { 2 }, 'bus_line_direction_variant_number'[line_direction] )\n    VAR __DS0FilterTable3 =\n        TREATAS (\n            { 0.90000000000000013 },\n            'percentile_percentage'[percentile_percentage]\n        )\n    VAR __DS0FilterTable4 =\n        TREATAS ( { 0, BLANK () }, 'bus_departure'[is_journey_failed] )\n    VAR __DS0FilterTable5 =\n        TREATAS (\n            { ( \"{{line_description}}\" ) },\n            'bus_line_hierarchy'[line_description]\n        )\n    VAR __DS0FilterTable6 =\n        TREATAS (\n            { ( {{year_month_sort}} ) },\n            'bus_traffic_trafficdate'[year_month]\n        )\n    VAR __DM3FilterTable =\n        TREATAS (\n            { \"Resor\", \"Tider\", \"Trafikturer\" },\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur kategori]\n        )\n    VAR __DS0Core =\n        SUMMARIZECOLUMNS (\n            ROLLUPADDISSUBTOTAL (\n                'Mätvärdesval trafiktur'[Mätvärde trafiktur kategori],\n                \"IsGrandTotalRowTotal\",\n                ROLLUPGROUP (\n                    'Mätvärdesval trafiktur'[Mätvärde trafiktur field],\n                    'Mätvärdesval trafiktur'[Mätvärde trafiktur order],\n                    'Mätvärdesval trafiktur'[Mätvärde trafiktur]\n                ),\n                \"IsDM1Total\",\n                NONVISUAL ( __DM3FilterTable )\n            ),\n            __DS0FilterTable,\n            __DS0FilterTable2,\n            __DS0FilterTable3,\n            __DS0FilterTable4,\n            __DS0FilterTable5,\n            __DS0FilterTable6\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN (\n            502,\n            __DS0Core,\n            [IsGrandTotalRowTotal], 0,\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur kategori], 1,\n            [IsDM1Total], 0,\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur order], 1,\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur], 1,\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur field], 1\n        )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY\n    [IsGrandTotalRowTotal] DESC,\n    'Mätvärdesval trafiktur'[Mätvärde trafiktur kategori],\n    [IsDM1Total] DESC,\n    'Mätvärdesval trafiktur'[Mätvärde trafiktur order],\n    'Mätvärdesval trafiktur'[Mätvärde trafiktur],\n    'Mätvärdesval trafiktur'[Mätvärde trafiktur field]",
+      "rls": {
+        "enabled": true,
+        "mode": "Flera användare (rotation)",
+        "users": [
+          {
+            "username": "sofia.rahlen@sl.se",
+            "roles": []
+          },
+          {
+            "username": "bjorn.marklund@sl.se",
+            "roles": []
+          },
+          {
+            "username": "anton.percy@sl.se",
+            "roles": []
+          },
+          {
+            "username": "peter.svahn@sl.se",
+            "roles": []
+          },
+          {
+            "username": "jerry.svensson@sl.se",
+            "roles": []
+          }
+        ]
+      },
+      "mode": "Flera queries (rotation)",
+      "params": [
+        {
+          "name": "daygroup_name",
+          "mode": "Slumpa",
+          "values": [
+            "Måndag-Torsdag",
+            "Fredagar",
+            "Lördagar",
+            "Sön- och helgdagar"
+          ],
+          "type": "text"
+        },
+        {
+          "name": "departure_pattern",
+          "mode": "Slumpa",
+          "values": [
+            "VH"
+          ],
+          "type": "text"
+        },
+        {
+          "name": "line_description",
+          "mode": "Slumpa",
+          "values": [
+            "816",
+            "532",
+            "4",
+            "1",
+            "179",
+            "3",
+            "6",
+            "172",
+            "2",
+            "5",
+            "607",
+            "50",
+            "178",
+            "173",
+            "471",
+            "474",
+            "176",
+            "177"
+          ],
+          "type": "number"
+        },
+        {
+          "name": "search_line_description",
+          "mode": "Slumpa",
+          "values": [
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9"
+          ],
+          "type": "number"
+        },
+        {
+          "name": "year_month_sort",
+          "mode": "Slumpa",
+          "values": [
+            "202401",
+            "202402",
+            "202403",
+            "202404",
+            "202405",
+            "202406",
+            "202407",
+            "202408",
+            "202409",
+            "202410",
+            "202411",
+            "202412",
+            "202501",
+            "202502",
+            "202503",
+            "202504",
+            "202505",
+            "202506",
+            "202507",
+            "202508",
+            "202509",
+            "202510",
+            "202511",
+            "202512",
+            "202601",
+            "202602",
+            "202603",
+            "202604",
+            "202605",
+            "202606"
+          ],
+          "type": "number"
+        }
+      ]
+    }
+  },
+  "76de0ef2-b022-46e8-b005-42ddf5c4f2e7::f581333a-7d39-439a-ae1d-7a7ee45b0ccd": {
+    "Lasttest-rapportsekvens-parametersatt": {
+      "dax": "DEFINE\n    VAR __DS0FilterTable =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_trafficdate'[daygroup_name]\n        )\n    VAR __DS0FilterTable2 =\n        TREATAS ( { 2 }, 'bus_line_direction_variant_number'[line_direction] )\n    VAR __DS0FilterTable4 =\n        TREATAS (\n            { 0.90000000000000013 },\n            'percentile_percentage'[percentile_percentage]\n        )\n    VAR __DS0FilterTable5 =\n        TREATAS ( { 0, BLANK () }, 'bus_departure'[is_journey_failed] )\n    VAR __DS0FilterTable6 =\n        TREATAS (\n            { ( \"{{line_description}}\" ) },\n            'bus_line_hierarchy'[line_description]\n        )\n    VAR __DS0FilterTable7 =\n        TREATAS (\n            { ( {{year_month_sort}} ) },\n            'bus_traffic_trafficdate'[year_month_sort]\n        )\n    VAR __DS0FilterTable8 =\n        TREATAS (\n            {\n                ( \"Resor\", \"'_measures'[max_trip_onboard_balanced_max_acc]\" ),\n                ( \"Resor\", \"'_measures'[pct_trip_onboard_balanced_max_acc]\" )\n            },\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur kategori],\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur field]\n        )\n    VAR __DS0Core =\n        SUMMARIZECOLUMNS (\n            'bus_line_hierarchy'[line_description],\n            'bus_line_direction_variant_number'[line_direction],\n            'bus_stops_observed_imputed'[stop_sequence_number],\n            'bus_stop_point'[stop_point_name],\n            __DS0FilterTable,\n            __DS0FilterTable2,\n            __DS0FilterTable4,\n            __DS0FilterTable5,\n            __DS0FilterTable6,\n            __DS0FilterTable7,\n            __DS0FilterTable8,\n            \"count_observed_departures\", '_measures'[count_observed_departures]\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN (\n            501,\n            __DS0Core,\n            'bus_line_hierarchy'[line_description], 1,\n            'bus_line_direction_variant_number'[line_direction], 1,\n            'bus_stops_observed_imputed'[stop_sequence_number], 1,\n            'bus_stop_point'[stop_point_name], 0\n        )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY\n    'bus_line_hierarchy'[line_description],\n    'bus_line_direction_variant_number'[line_direction],\n    'bus_stops_observed_imputed'[stop_sequence_number],\n    'bus_stop_point'[stop_point_name] DESC\n---\nDEFINE\n    VAR __DS0FilterTable =\n        TREATAS ( { \"hh:mm:ss\" }, 'Tidsformat'[Formatera sekunder som...] )\n    VAR __DS0FilterTable2 =\n        TREATAS (\n            { \"Genomsnitt exkl. avgångar & stopp\" },\n            'Trafiktur aggregat exkl. avgångar & stopp'[Beräkna trafikturens...]\n        )\n    VAR __DS0FilterTable3 =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_trafficdate'[daygroup_name]\n        )\n    VAR __DS0FilterTable4 =\n        TREATAS ( { 2 }, 'bus_line_direction_variant_number'[line_direction] )\n    VAR __DS0FilterTable5 =\n        TREATAS (\n            { 0.90000000000000013 },\n            'percentile_percentage'[percentile_percentage]\n        )\n    VAR __DS0FilterTable6 =\n        TREATAS ( { 0, BLANK () }, 'bus_departure'[is_journey_failed] )\n    VAR __DS0FilterTable7 =\n        TREATAS (\n            { ( \"{{line_description}}\" ) },\n            'bus_line_hierarchy'[line_description]\n        )\n    VAR __DS0FilterTable8 =\n        TREATAS (\n            { ( {{year_month_sort}} ) },\n            'bus_traffic_trafficdate'[year_month_sort]\n        )\n    VAR __DS0FilterTable9 =\n        TREATAS (\n            {\n                ( \"Resor\", \"'_measures'[max_trip_onboard_balanced_max_acc]\" ),\n                ( \"Resor\", \"'_measures'[pct_trip_onboard_balanced_max_acc]\" ),\n                ( \"Trafikturer\", \"'_measures'[count_trips]\" )\n            },\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur kategori],\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur field]\n        )\n    VAR __DS0Core =\n        SUMMARIZECOLUMNS (\n            ROLLUPADDISSUBTOTAL (\n                'bus_line_hierarchy'[line_description],\n                \"IsGrandTotalRowTotal\",\n                'bus_line_direction_variant_number'[line_direction],\n                \"IsDM1Total\",\n                'bus_time'[hour_minute_formatted],\n                \"IsDM3Total\"\n            ),\n            __DS0FilterTable,\n            __DS0FilterTable2,\n            __DS0FilterTable3,\n            __DS0FilterTable4,\n            __DS0FilterTable5,\n            __DS0FilterTable6,\n            __DS0FilterTable7,\n            __DS0FilterTable8,\n            __DS0FilterTable9,\n            \"max_trip_onboard_balanced_max_acc\", '_measures'[max_trip_onboard_balanced_max_acc],\n            \"pct_trip_onboard_balanced_max_acc\", '_measures'[pct_trip_onboard_balanced_max_acc],\n            \"count_trips\", '_measures'[count_trips]\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN (\n            502,\n            __DS0Core,\n            [IsGrandTotalRowTotal], 0,\n            'bus_line_hierarchy'[line_description], 1,\n            [IsDM1Total], 0,\n            'bus_line_direction_variant_number'[line_direction], 1,\n            [IsDM3Total], 0,\n            'bus_time'[hour_minute_formatted], 1\n        )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY\n    [IsGrandTotalRowTotal] DESC,\n    'bus_line_hierarchy'[line_description],\n    [IsDM1Total] DESC,\n    'bus_line_direction_variant_number'[line_direction],\n    [IsDM3Total] DESC,\n    'bus_time'[hour_minute_formatted]\n---\nDEFINE\n    VAR __DS0FilterTable =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_trafficdate'[daygroup_name]\n        )\n    VAR __DS0FilterTable2 =\n        TREATAS ( { 2 }, 'bus_line_direction_variant_number'[line_direction] )\n    VAR __DS0FilterTable3 =\n        TREATAS (\n            { 0.90000000000000013 },\n            'percentile_percentage'[percentile_percentage]\n        )\n    VAR __DS0FilterTable4 =\n        TREATAS ( { 0, BLANK () }, 'bus_departure'[is_journey_failed] )\n    VAR __DS0FilterTable5 =\n        FILTER (\n            KEEPFILTERS (\n                SUMMARIZE (\n                    VALUES ( 'bus_line_hierarchy' ),\n                    'bus_line_hierarchy'[contract_name],\n                    'bus_line_hierarchy'[line_description]\n                )\n            ),\n            OR (\n                SEARCH ( \"{{search_line_description}}\", 'bus_line_hierarchy'[contract_name], 1, 0 ) >= 1,\n                SEARCH ( \"{{search_line_description}}\", 'bus_line_hierarchy'[line_description], 1, 0 ) >= 1\n            )\n        )\n    VAR __DS0FilterTable6 =\n        TREATAS (\n            { ( {{year_month_sort}} ) },\n            'bus_traffic_trafficdate'[year_month_sort]\n        )\n    VAR __DS0FilterTable7 =\n        TREATAS (\n            {\n                ( \"Resor\", \"'_measures'[max_trip_onboard_balanced_max_acc]\" ),\n                ( \"Resor\", \"'_measures'[pct_trip_onboard_balanced_max_acc]\" )\n            },\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur kategori],\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur field]\n        )\n    VAR __DM3FilterTable =\n        TREATAS (\n            { \"Tyresö\", \"Grön linje\", \"Solna/Sundbyberg\", \"Innerstaden\" },\n            'bus_line_hierarchy'[contract_name]\n        )\n    VAR __ValueFilterDM3 =\n        FILTER (\n            KEEPFILTERS (\n                CALCULATETABLE (\n                    ADDCOLUMNS (\n                        KEEPFILTERS (\n                            SUMMARIZE (\n                                VALUES ( 'bus_line_hierarchy' ),\n                                'bus_line_hierarchy'[contract_name],\n                                'bus_line_hierarchy'[line_description]\n                            )\n                        ),\n                        \"count_trips\", '_measures'[count_trips]\n                    ),\n                    KEEPFILTERS ( __DS0FilterTable ),\n                    KEEPFILTERS ( __DS0FilterTable2 ),\n                    KEEPFILTERS ( __DS0FilterTable3 ),\n                    KEEPFILTERS ( __DS0FilterTable4 ),\n                    KEEPFILTERS ( __DS0FilterTable5 ),\n                    KEEPFILTERS ( __DS0FilterTable6 ),\n                    KEEPFILTERS ( __DS0FilterTable7 )\n                )\n            ),\n            NOT ( ISBLANK ( [count_trips] ) )\n        )\n    VAR __DS0Core =\n        SELECTCOLUMNS (\n            KEEPFILTERS (\n                SUMMARIZECOLUMNS (\n                    ROLLUPADDISSUBTOTAL (\n                        'bus_line_hierarchy'[contract_name],\n                        \"IsGrandTotalRowTotal\",\n                        'bus_line_hierarchy'[line_description],\n                        \"IsDM1Total\",\n                        NONVISUAL ( __DM3FilterTable )\n                    ),\n                    __DS0FilterTable,\n                    __DS0FilterTable2,\n                    __DS0FilterTable3,\n                    __DS0FilterTable4,\n                    __DS0FilterTable5,\n                    __DS0FilterTable6,\n                    __DS0FilterTable7,\n                    __ValueFilterDM3,\n                    \"CountRowsbus_line_hierarchy\", COUNTROWS ( 'bus_line_hierarchy' )\n                )\n            ),\n            \"'bus_line_hierarchy'[contract_name]\", 'bus_line_hierarchy'[contract_name],\n            \"'bus_line_hierarchy'[line_description]\", 'bus_line_hierarchy'[line_description],\n            \"IsGrandTotalRowTotal\", [IsGrandTotalRowTotal],\n            \"IsDM1Total\", [IsDM1Total]\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN (\n            502,\n            __DS0Core,\n            [IsGrandTotalRowTotal], 0,\n            'bus_line_hierarchy'[contract_name], 1,\n            [IsDM1Total], 0,\n            'bus_line_hierarchy'[line_description], 1\n        )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY\n    [IsGrandTotalRowTotal] DESC,\n    'bus_line_hierarchy'[contract_name],\n    [IsDM1Total] DESC,\n    'bus_line_hierarchy'[line_description]\n---\nDEFINE\n    VAR __DS0FilterTable =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_trafficdate'[daygroup_name]\n        )\n    VAR __DS0FilterTable2 =\n        TREATAS (\n            { 0.90000000000000013 },\n            'percentile_percentage'[percentile_percentage]\n        )\n    VAR __DS0FilterTable3 =\n        TREATAS ( { 0, BLANK () }, 'bus_departure'[is_journey_failed] )\n    VAR __DS0FilterTable4 =\n        TREATAS (\n            { ( \"{{line_description}}\" ) },\n            'bus_line_hierarchy'[line_description]\n        )\n    VAR __DS0FilterTable5 =\n        TREATAS (\n            { ( 1, 1 ) },\n            'bus_line_direction_variant_number'[line_direction],\n            'bus_line_direction_variant_number'[variant_number]\n        )\n    VAR __DS0FilterTable6 =\n        TREATAS (\n            { ( {{year_month_sort}} ) },\n            'bus_traffic_trafficdate'[year_month_sort]\n        )\n    VAR __DS0FilterTable7 =\n        TREATAS (\n            {\n                ( \"Resor\", \"'_measures'[avg_trip_onboard_balanced_max_acc]\" ),\n                ( \"Trafikturer\", \"'_measures'[count_planned_trips]\" ),\n                ( \"Trafikturer\", \"'_measures'[count_trips]\" )\n            },\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur kategori],\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur field]\n        )\n    VAR __DS0Core =\n        FILTER (\n            KEEPFILTERS (\n                CALCULATETABLE (\n                    ADDCOLUMNS (\n                        KEEPFILTERS ( VALUES ( 'bus_stop_point'[stop_point_name] ) ),\n                        \"count_trips\", '_measures'[count_trips]\n                    ),\n                    KEEPFILTERS ( __DS0FilterTable ),\n                    KEEPFILTERS ( __DS0FilterTable2 ),\n                    KEEPFILTERS ( __DS0FilterTable3 ),\n                    KEEPFILTERS ( __DS0FilterTable4 ),\n                    KEEPFILTERS ( __DS0FilterTable5 ),\n                    KEEPFILTERS ( __DS0FilterTable6 ),\n                    KEEPFILTERS ( __DS0FilterTable7 )\n                )\n            ),\n            NOT ( ISBLANK ( [count_trips] ) )\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN ( 101, __DS0Core, 'bus_stop_point'[stop_point_name], 1 )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY 'bus_stop_point'[stop_point_name]\n---\nDEFINE\n    VAR __DS0FilterTable =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_trafficdate'[daygroup_name]\n        )\n    VAR __DS0FilterTable2 =\n        TREATAS ( { 2 }, 'bus_line_direction_variant_number'[line_direction] )\n    VAR __DS0FilterTable3 =\n        TREATAS (\n            { 0.90000000000000013 },\n            'percentile_percentage'[percentile_percentage]\n        )\n    VAR __DS0FilterTable4 =\n        TREATAS ( { 0, BLANK () }, 'bus_departure'[is_journey_failed] )\n    VAR __DS0FilterTable5 =\n        TREATAS (\n            { ( \"{{line_description}}\" ) },\n            'bus_line_hierarchy'[line_description]\n        )\n    VAR __DS0FilterTable6 =\n        TREATAS (\n            { ( {{year_month_sort}} ) },\n            'bus_traffic_trafficdate'[year_month_sort]\n        )\n    VAR __DS0FilterTable7 =\n        TREATAS (\n            {\n                ( \"Resor\", \"'_measures'[pct_trip_onboard_balanced_max_acc]\" ),\n                ( \"Tider\", \"'_measures'[pct_trip_run_time_since_last_stop_and_stop_time_minus_first_acc_s]\" ),\n                ( \"Trafikturer\", \"'_measures'[count_trips]\" )\n            },\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur kategori],\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur field]\n        )\n    VAR __DM3FilterTable =\n        TREATAS ( { \"{{departure_pattern}}\" }, 'bus_traffic_period'[departure_pattern] )\n    VAR __ValueFilterDM6 =\n        FILTER (\n            KEEPFILTERS (\n                CALCULATETABLE (\n                    ADDCOLUMNS (\n                        KEEPFILTERS (\n                            SUMMARIZE (\n                                VALUES ( 'bus_traffic_period' ),\n                                'bus_traffic_period'[departure_pattern],\n                                'bus_traffic_period'[headtimetable_period_code],\n                                'bus_traffic_period'[traffic_period_from]\n                            )\n                        ),\n                        \"count_trips\", '_measures'[count_trips]\n                    ),\n                    KEEPFILTERS ( __DS0FilterTable ),\n                    KEEPFILTERS ( __DS0FilterTable2 ),\n                    KEEPFILTERS ( __DS0FilterTable3 ),\n                    KEEPFILTERS ( __DS0FilterTable4 ),\n                    KEEPFILTERS ( __DS0FilterTable5 ),\n                    KEEPFILTERS ( __DS0FilterTable6 ),\n                    KEEPFILTERS ( __DS0FilterTable7 )\n                )\n            ),\n            NOT ( ISBLANK ( [count_trips] ) )\n        )\n    VAR __DS0Core =\n        SELECTCOLUMNS (\n            KEEPFILTERS (\n                SUMMARIZECOLUMNS (\n                    ROLLUPADDISSUBTOTAL (\n                        'bus_traffic_period'[departure_pattern],\n                        \"IsGrandTotalRowTotal\",\n                        'bus_traffic_period'[headtimetable_period_code],\n                        \"IsDM1Total\",\n                        NONVISUAL ( __DM3FilterTable )\n                    ),\n                    __DS0FilterTable,\n                    __DS0FilterTable2,\n                    __DS0FilterTable3,\n                    __DS0FilterTable4,\n                    __DS0FilterTable5,\n                    __DS0FilterTable6,\n                    __DS0FilterTable7,\n                    __ValueFilterDM6,\n                    \"CountRowsbus_traffic_period\", COUNTROWS ( 'bus_traffic_period' )\n                )\n            ),\n            \"'bus_traffic_period'[departure_pattern]\", 'bus_traffic_period'[departure_pattern],\n            \"'bus_traffic_period'[headtimetable_period_code]\", 'bus_traffic_period'[headtimetable_period_code],\n            \"IsGrandTotalRowTotal\", [IsGrandTotalRowTotal],\n            \"IsDM1Total\", [IsDM1Total]\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN (\n            502,\n            __DS0Core,\n            [IsGrandTotalRowTotal], 0,\n            'bus_traffic_period'[departure_pattern], 1,\n            [IsDM1Total], 0,\n            'bus_traffic_period'[headtimetable_period_code], 1\n        )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY\n    [IsGrandTotalRowTotal] DESC,\n    'bus_traffic_period'[departure_pattern],\n    [IsDM1Total] DESC,\n    'bus_traffic_period'[headtimetable_period_code]\n---\nDEFINE\n    VAR __DS0FilterTable =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_trafficdate'[daygroup_name]\n        )\n    VAR __DS0FilterTable2 =\n        TREATAS (\n            { 0.90000000000000013 },\n            'percentile_percentage'[percentile_percentage]\n        )\n    VAR __DS0FilterTable3 =\n        TREATAS ( { 0, BLANK () }, 'bus_departure'[is_journey_failed] )\n    VAR __DS0FilterTable4 =\n        TREATAS (\n            { ( \"{{line_description}}\" ) },\n            'bus_line_hierarchy'[line_description]\n        )\n    VAR __DS0FilterTable5 =\n        TREATAS (\n            { ( {{year_month_sort}} ) },\n            'bus_traffic_trafficdate'[year_month_sort]\n        )\n    VAR __DS0FilterTable6 =\n        TREATAS (\n            {\n                ( \"Resor\", \"'_measures'[pct_trip_onboard_balanced_max_acc]\" ),\n                ( \"Tider\", \"'_measures'[pct_trip_run_time_since_last_stop_and_stop_time_minus_first_acc_s]\" ),\n                ( \"Trafikturer\", \"'_measures'[count_trips]\" )\n            },\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur kategori],\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur field]\n        )\n    VAR __DM3FilterTable =\n        TREATAS ( { 2, 1 }, 'bus_line_direction_variant_number'[line_direction] )\n    VAR __ValueFilterDM3 =\n        FILTER (\n            KEEPFILTERS (\n                CALCULATETABLE (\n                    ADDCOLUMNS (\n                        KEEPFILTERS (\n                            SUMMARIZE (\n                                VALUES ( 'bus_line_direction_variant_number' ),\n                                'bus_line_direction_variant_number'[line_direction],\n                                'bus_line_direction_variant_number'[variant_number]\n                            )\n                        ),\n                        \"count_trips\", '_measures'[count_trips]\n                    ),\n                    KEEPFILTERS ( __DS0FilterTable ),\n                    KEEPFILTERS ( __DS0FilterTable2 ),\n                    KEEPFILTERS ( __DS0FilterTable3 ),\n                    KEEPFILTERS ( __DS0FilterTable4 ),\n                    KEEPFILTERS ( __DS0FilterTable5 ),\n                    KEEPFILTERS ( __DS0FilterTable6 )\n                )\n            ),\n            NOT ( ISBLANK ( [count_trips] ) )\n        )\n    VAR __DS0Core =\n        SELECTCOLUMNS (\n            KEEPFILTERS (\n                SUMMARIZECOLUMNS (\n                    ROLLUPADDISSUBTOTAL (\n                        'bus_line_direction_variant_number'[line_direction],\n                        \"IsGrandTotalRowTotal\",\n                        'bus_line_direction_variant_number'[variant_number],\n                        \"IsDM1Total\",\n                        NONVISUAL ( __DM3FilterTable )\n                    ),\n                    __DS0FilterTable,\n                    __DS0FilterTable2,\n                    __DS0FilterTable3,\n                    __DS0FilterTable4,\n                    __DS0FilterTable5,\n                    __DS0FilterTable6,\n                    __ValueFilterDM3,\n                    \"CountRowsbus_line_direction_variant_number\", COUNTROWS ( 'bus_line_direction_variant_number' )\n                )\n            ),\n            \"'bus_line_direction_variant_number'[line_direction]\", 'bus_line_direction_variant_number'[line_direction],\n            \"'bus_line_direction_variant_number'[variant_number]\", 'bus_line_direction_variant_number'[variant_number],\n            \"IsGrandTotalRowTotal\", [IsGrandTotalRowTotal],\n            \"IsDM1Total\", [IsDM1Total]\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN (\n            502,\n            __DS0Core,\n            [IsGrandTotalRowTotal], 0,\n            'bus_line_direction_variant_number'[line_direction], 1,\n            [IsDM1Total], 0,\n            'bus_line_direction_variant_number'[variant_number], 1\n        )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY\n    [IsGrandTotalRowTotal] DESC,\n    'bus_line_direction_variant_number'[line_direction],\n    [IsDM1Total] DESC,\n    'bus_line_direction_variant_number'[variant_number]\n---\nDEFINE\n    VAR __DS0FilterTable =\n        TREATAS ( { 2024, 2025, 2026, 2027 }, 'bus_traffic_trafficdate'[year] )\n    VAR __DS0FilterTable2 =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_trafficdate'[daygroup_name]\n        )\n    VAR __DS0FilterTable3 =\n        TREATAS (\n            { 0.90000000000000013 },\n            'percentile_percentage'[percentile_percentage]\n        )\n    VAR __DS0FilterTable4 =\n        TREATAS ( { 0, BLANK () }, 'bus_departure'[is_journey_failed] )\n    VAR __DS0FilterTable5 =\n        TREATAS (\n            { ( \"{{line_description}}\" ) },\n            'bus_line_hierarchy'[line_description]\n        )\n    VAR __DS0FilterTable6 =\n        TREATAS (\n            { ( 1, 1 ) },\n            'bus_line_direction_variant_number'[line_direction],\n            'bus_line_direction_variant_number'[variant_number]\n        )\n    VAR __DS0FilterTable7 =\n        TREATAS (\n            {\n                ( \"Resor\", \"'_measures'[avg_trip_onboard_balanced_max_acc]\" ),\n                ( \"Trafikturer\", \"'_measures'[count_planned_trips]\" ),\n                ( \"Trafikturer\", \"'_measures'[count_trips]\" )\n            },\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur kategori],\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur field]\n        )\n    VAR __DM3FilterTable =\n        TREATAS ( { 2026, 2025, 2024 }, 'bus_traffic_trafficdate'[year] )\n    VAR __DM5FilterTable =\n        TREATAS (\n            { ( {{year_month_sort}} ) },\n            'bus_traffic_trafficdate'[year_month_sort]\n        )\n    VAR __DS0Core =\n        SUMMARIZECOLUMNS (\n            ROLLUPADDISSUBTOTAL (\n                'bus_traffic_trafficdate'[year],\n                \"IsGrandTotalRowTotal\",\n                ROLLUPGROUP (\n                    'bus_traffic_trafficdate'[year_month],\n                    'bus_traffic_trafficdate'[year_month_sort]\n                ),\n                \"IsDM1Total\",\n                NONVISUAL ( __DM3FilterTable ),\n                ROLLUPGROUP (\n                    'bus_traffic_trafficdate'[year_week],\n                    'bus_traffic_trafficdate'[year_week_sort]\n                ),\n                \"IsDM3Total\",\n                NONVISUAL ( __DM3FilterTable ),\n                NONVISUAL ( __DM5FilterTable )\n            ),\n            __DS0FilterTable,\n            __DS0FilterTable2,\n            __DS0FilterTable3,\n            __DS0FilterTable4,\n            __DS0FilterTable5,\n            __DS0FilterTable6,\n            __DS0FilterTable7\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN (\n            502,\n            __DS0Core,\n            [IsGrandTotalRowTotal], 0,\n            'bus_traffic_trafficdate'[year], 1,\n            [IsDM1Total], 0,\n            'bus_traffic_trafficdate'[year_month_sort], 1,\n            'bus_traffic_trafficdate'[year_month], 1,\n            [IsDM3Total], 0,\n            'bus_traffic_trafficdate'[year_week_sort], 1,\n            'bus_traffic_trafficdate'[year_week], 1\n        )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY\n    [IsGrandTotalRowTotal] DESC,\n    'bus_traffic_trafficdate'[year],\n    [IsDM1Total] DESC,\n    'bus_traffic_trafficdate'[year_month_sort],\n    'bus_traffic_trafficdate'[year_month],\n    [IsDM3Total] DESC,\n    'bus_traffic_trafficdate'[year_week_sort],\n    'bus_traffic_trafficdate'[year_week]\n---\nDEFINE\n    VAR __DS0FilterTable =\n        TREATAS (\n            { 0.90000000000000013 },\n            'percentile_percentage'[percentile_percentage]\n        )\n    VAR __DS0FilterTable2 =\n        TREATAS ( { 0, BLANK () }, 'bus_departure'[is_journey_failed] )\n    VAR __DS0FilterTable3 =\n        TREATAS (\n            { ( \"{{line_description}}\" ) },\n            'bus_line_hierarchy'[line_description]\n        )\n    VAR __DS0FilterTable4 =\n        TREATAS (\n            { ( 1, 1 ) },\n            'bus_line_direction_variant_number'[line_direction],\n            'bus_line_direction_variant_number'[variant_number]\n        )\n    VAR __DS0FilterTable5 =\n        TREATAS (\n            { ( {{year_month_sort}} ) },\n            'bus_traffic_trafficdate'[year_month_sort]\n        )\n    VAR __DS0FilterTable6 =\n        TREATAS (\n            {\n                ( \"Resor\", \"'_measures'[max_trip_onboard_balanced_max_acc]\" ),\n                ( \"Resor\", \"'_measures'[pct_trip_onboard_balanced_max_acc]\" ),\n                ( \"Trafikturer\", \"'_measures'[count_trips]\" )\n            },\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur kategori],\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur field]\n        )\n    VAR __DS0Core =\n        CALCULATETABLE (\n            SUMMARIZE (\n                VALUES ( 'bus_traffic_trafficdate' ),\n                'bus_traffic_trafficdate'[daygroup_name],\n                'bus_traffic_trafficdate'[daygroup_sort]\n            ),\n            KEEPFILTERS ( __DS0FilterTable ),\n            KEEPFILTERS ( __DS0FilterTable2 ),\n            KEEPFILTERS ( __DS0FilterTable3 ),\n            KEEPFILTERS ( __DS0FilterTable4 ),\n            KEEPFILTERS ( __DS0FilterTable5 ),\n            KEEPFILTERS ( __DS0FilterTable6 )\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN (\n            101,\n            __DS0Core,\n            'bus_traffic_trafficdate'[daygroup_sort], 1,\n            'bus_traffic_trafficdate'[daygroup_name], 1\n        )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY\n    'bus_traffic_trafficdate'[daygroup_sort],\n    'bus_traffic_trafficdate'[daygroup_name]\n---\nDEFINE\n    VAR __DS0FilterTable =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_trafficdate'[daygroup_name]\n        )\n    VAR __DS0FilterTable2 =\n        TREATAS ( { 2 }, 'bus_line_direction_variant_number'[line_direction] )\n    VAR __DS0FilterTable3 =\n        TREATAS (\n            { 0.90000000000000013 },\n            'percentile_percentage'[percentile_percentage]\n        )\n    VAR __DS0FilterTable4 =\n        TREATAS ( { 0, BLANK () }, 'bus_departure'[is_journey_failed] )\n    VAR __DS0FilterTable5 =\n        TREATAS (\n            { ( \"{{line_description}}\" ) },\n            'bus_line_hierarchy'[line_description]\n        )\n    VAR __DS0FilterTable6 =\n        TREATAS (\n            { ( {{year_month_sort}} ) },\n            'bus_traffic_trafficdate'[year_month]\n        )\n    VAR __DM3FilterTable =\n        TREATAS (\n            { \"Resor\", \"Tider\", \"Trafikturer\" },\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur kategori]\n        )\n    VAR __DS0Core =\n        SUMMARIZECOLUMNS (\n            ROLLUPADDISSUBTOTAL (\n                'Mätvärdesval trafiktur'[Mätvärde trafiktur kategori],\n                \"IsGrandTotalRowTotal\",\n                ROLLUPGROUP (\n                    'Mätvärdesval trafiktur'[Mätvärde trafiktur field],\n                    'Mätvärdesval trafiktur'[Mätvärde trafiktur order],\n                    'Mätvärdesval trafiktur'[Mätvärde trafiktur]\n                ),\n                \"IsDM1Total\",\n                NONVISUAL ( __DM3FilterTable )\n            ),\n            __DS0FilterTable,\n            __DS0FilterTable2,\n            __DS0FilterTable3,\n            __DS0FilterTable4,\n            __DS0FilterTable5,\n            __DS0FilterTable6\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN (\n            502,\n            __DS0Core,\n            [IsGrandTotalRowTotal], 0,\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur kategori], 1,\n            [IsDM1Total], 0,\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur order], 1,\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur], 1,\n            'Mätvärdesval trafiktur'[Mätvärde trafiktur field], 1\n        )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY\n    [IsGrandTotalRowTotal] DESC,\n    'Mätvärdesval trafiktur'[Mätvärde trafiktur kategori],\n    [IsDM1Total] DESC,\n    'Mätvärdesval trafiktur'[Mätvärde trafiktur order],\n    'Mätvärdesval trafiktur'[Mätvärde trafiktur],\n    'Mätvärdesval trafiktur'[Mätvärde trafiktur field]",
+      "rls": {
+        "enabled": true,
+        "mode": "Flera användare (rotation)",
+        "users": [
+          {
+            "username": "sofia.rahlen@sl.se",
+            "roles": []
+          },
+          {
+            "username": "bjorn.marklund@sl.se",
+            "roles": []
+          },
+          {
+            "username": "anton.percy@sl.se",
+            "roles": []
+          },
+          {
+            "username": "peter.svahn@sl.se",
+            "roles": []
+          },
+          {
+            "username": "jerry.svensson@sl.se",
+            "roles": []
+          }
+        ]
+      },
+      "mode": "Flera queries (rotation)",
+      "params": [
+        {
+          "name": "daygroup_name",
+          "mode": "Slumpa",
+          "values": [
+            "Måndag-Torsdag",
+            "Fredagar",
+            "Lördagar",
+            "Sön- och helgdagar"
+          ],
+          "type": "text"
+        },
+        {
+          "name": "departure_pattern",
+          "mode": "Slumpa",
+          "values": [
+            "V",
+            "S",
+            "I",
+            "H",
+            "VH",
+            "SI",
+            "DFH",
+            "HTT",
+            "SIX",
+            "VHX",
+            "SOMMAR",
+            "Midsommardagen",
+            "VHDAG1",
+            "ANNANDAGEN",
+            "Nyårsdagen",
+            "Trettondagsafton",
+            "Kristi himmelsfärd",
+            "Långfredag",
+            "SKOLLOV",
+            "Annandag påsk",
+            "NYÅRSAFTON",
+            "SPECIAL",
+            "JULAFTON",
+            "JULAFT-JULD",
+            "MELLANDAGAR",
+            "All Helgona",
+            "SKOLLOV_1",
+            "MELKER",
+            "SÖH-(LÖSÖH)",
+            "JULDAGEN",
+            "Skärtorsdag",
+            "SÖH-(SÖH)",
+            "SÖH(SÖH)V",
+            "SÖH(SÖH)H",
+            "MIDSOMMAR",
+            "Unknown",
+            "Nyårsafton",
+            "Trettondagen",
+            "SKOLLOV_2",
+            "Nationaldagen",
+            "NYÅRSDAGEN",
+            "MAOH",
+            "Annandag Jul",
+            "PÅSK",
+            "EXTRATUR",
+            "Kristi himmelfärd",
+            "SÖH-SÖH"
+          ],
+          "type": "text"
+        },
+        {
+          "name": "line_description",
+          "mode": "Slumpa",
+          "values": [
+            "816",
+            "532",
+            "4",
+            "1",
+            "179",
+            "3",
+            "6",
+            "172",
+            "2",
+            "5",
+            "607",
+            "50",
+            "178",
+            "173",
+            "471",
+            "474",
+            "176",
+            "177"
+          ],
+          "type": "number"
+        },
+        {
+          "name": "search_line_description",
+          "mode": "Slumpa",
+          "values": [
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9"
+          ],
+          "type": "number"
+        },
+        {
+          "name": "year_month_sort",
+          "mode": "Slumpa",
+          "values": [
+            "202401",
+            "202402",
+            "202403",
+            "202404",
+            "202405",
+            "202406",
+            "202407",
+            "202408",
+            "202409",
+            "202410",
+            "202411",
+            "202412",
+            "202501",
+            "202502",
+            "202503",
+            "202504",
+            "202505",
+            "202506",
+            "202507",
+            "202508",
+            "202509",
+            "202510",
+            "202511",
+            "202512",
+            "202601",
+            "202602",
+            "202603",
+            "202604",
+            "202605",
+            "202606"
+          ],
+          "type": "number"
+        }
+      ]
+    }
+  },
+  "76de0ef2-b022-46e8-b005-42ddf5c4f2e7::17870859-f2fc-4b20-9817-223eee37e9f8": {
+    "Jukka-first-test-params": {
+      "dax": "DEFINE\n    MEASURE '_measures'[__avg_last_tur_apc] =\n        (\n            CALCULATE (\n                AVERAGE ( bus_departures_observed_imputed[onboard_balanced] ),\n                bus_departures_observed_imputed[is_apc_measured] = 1\n            )\n        )\n    MEASURE '_measures'[__stdev_last_tur] =\n        (\n            CALCULATE (\n                STDEV.P ( bus_departures_observed_imputed[onboard_balanced] ),\n                bus_departures_observed_imputed[is_apc_measured] = 1\n            )\n        )\n    MEASURE '_measures'[__ktid] =\n        (\n            AVERAGE ( bus_departures_observed_imputed[time_since_last_stop_and_stop_time_minus_first_acc] )\n        )\n    MEASURE '_measures'[__ktid_90] =\n        (\n            PERCENTILE.INC (\n                bus_departures_observed_imputed[time_since_last_stop_and_stop_time_minus_first_acc],\n                0.9\n            )\n        )\n    MEASURE '_measures'[__max_ktid] =\n        (\n            MAX ( bus_departures_observed_imputed[time_since_last_stop_and_stop_time_minus_first_acc] )\n        )\n    MEASURE '_measures'[__avg_last_tur] =\n        (\n            DIVIDE (\n                SUM ( bus_departures_observed_imputed[onboard_balanced] ),\n                [count_observed_trips]\n            )\n        )\n    -- EXPLICITA ANVÄNDARFILTER (Dina faktiska slicers/val)\n    VAR __DS0FilterTable =\n        TREATAS ( { {{daygroup_name}} }, 'bus_traffic_trafficdate'[daygroup_name] )\n    VAR __DS0FilterTable2 =\n        TREATAS ( { 0, BLANK () }, 'bus_departure'[is_journey_failed] )\n    VAR __DS0FilterTable3 =\n        TREATAS (\n            { ( {{line_number}} ) },\n            'bus_line_hierarchy'[line_description]\n        )\n    VAR __DS0FilterTable4 =\n        TREATAS (\n            { ( 1, 1 ) },\n            'bus_line_direction_variant_number'[line_direction],\n            'bus_line_direction_variant_number'[variant_number]\n        )\n    VAR __DS0FilterTable5 =\n        TREATAS (\n            { ( {{year_month}} ) },\n            'bus_traffic_trafficdate'[year_month]\n        )\n    -- KÄRNBERÄKNING (Städad från NONVISUAL-brus)\n    VAR __DS0Core =\n        SUMMARIZECOLUMNS (\n            'bus_line_hierarchy'[contract_name],\n            ROLLUPADDISSUBTOTAL (\n                'bus_line_hierarchy'[line_description], \"IsGrandTotalRowTotal\",\n                'bus_line_direction_variant_number'[line_direction], \"IsDM1Total\",\n                'bus_time'[hour_minute_formatted], \"IsDM3Total\"\n            ),\n            __DS0FilterTable,\n            __DS0FilterTable2,\n            __DS0FilterTable3,\n            __DS0FilterTable4,\n            __DS0FilterTable5,\n\"count_trips\", '_measures'[count_trips],\n\"__avg_last_tur_apc\", '_measures'[__avg_last_tur_apc],\n\"__stdev_last_tur\", '_measures'[__stdev_last_tur],\n\"__ktid\", '_measures'[__ktid],\n\"__ktid_90\", '_measures'[__ktid_90],\n\"__max_ktid\", '_measures'[__max_ktid],\n\"__avg_last_tur\", '_measures'[__avg_last_tur]\n        )\n    -- TOPN-BEGRÄNSNING FÖR MATRISVISUALISERINGEN\n    VAR __DS0PrimaryWindowed =\n        TOPN (\n            502,\n            __DS0Core,\n            [IsGrandTotalRowTotal], 0,\n            'bus_line_hierarchy'[line_description], 1,\n            [IsDM1Total], 0,\n            'bus_line_direction_variant_number'[line_direction], 1,\n            [IsDM3Total], 0,\n            'bus_time'[hour_minute_formatted], 1\n        )\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY\n    [IsGrandTotalRowTotal] DESC,\n    'bus_line_hierarchy'[line_description],\n    [IsDM1Total] DESC,\n    'bus_line_direction_variant_number'[line_direction],\n    [IsDM3Total] DESC,\n    'bus_time'[hour_minute_formatted]",
+      "rls": {
+        "enabled": false,
+        "mode": "Ingen",
+        "users": []
+      },
+      "mode": "Flera queries (rotation)",
+      "params": [
+        {
+          "name": "daygroup_name",
+          "mode": "Slumpa",
+          "values": [
+            "Lördagar",
+            "Sön- och helgdagar",
+            "Fredagar",
+            "Måndag-Torsdag"
+          ],
+          "type": "text"
+        },
+        {
+          "name": "line_number",
+          "mode": "Slumpa",
+          "values": [
+            "147",
+            "151",
+            "152",
+            "153",
+            "155",
+            "156",
+            "157",
+            "158",
+            "159",
+            "160",
+            "163",
+            "164",
+            "167",
+            "168",
+            "169",
+            "173",
+            "175",
+            "177",
+            "178",
+            "179",
+            "180",
+            "181",
+            "182",
+            "184",
+            "185",
+            "188",
+            "190",
+            "191",
+            "192",
+            "193",
+            "195",
+            "196",
+            "197",
+            "199",
+            "201",
+            "202",
+            "203",
+            "204",
+            "206",
+            "207",
+            "211",
+            "212",
+            "221",
+            "222",
+            "225",
+            "233",
+            "238",
+            "250",
+            "282",
+            "291",
+            "293",
+            "301",
+            "302",
+            "303",
+            "304",
+            "305",
+            "309",
+            "311",
+            "312",
+            "313",
+            "314",
+            "315",
+            "316",
+            "317",
+            "318",
+            "322",
+            "323",
+            "325",
+            "333",
+            "336",
+            "338",
+            "340",
+            "342",
+            "350",
+            "401",
+            "402",
+            "403"
+          ],
+          "type": "number"
+        },
+        {
+          "name": "year_month",
+          "mode": "Slumpa",
+          "values": [
+            "2025-03",
+            "2025-04"
+          ],
+          "type": "text"
+        }
+      ]
+    }
   }
 }
