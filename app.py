@@ -31,61 +31,256 @@ st.set_page_config(
 # ─── CSS ─────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
-    .stApp { background: #0d1117; }
+    :root {
+        --bg-primary:    #0d1117;
+        --bg-secondary:  #161b22;
+        --bg-tertiary:   #1c2128;
+        --border-color:  #30363d;
+        --border-subtle: #21262d;
+        --text-primary:  #e6edf3;
+        --text-secondary:#8b949e;
+        --accent:        #00d4aa;
+        --accent-hover:  #00f0c0;
+        --warning:       #f0b429;
+        --error:         #ef4444;
+        --success:       #00d4aa;
+    }
 
+    /* ── Bas ──────────────────────────────────────────────────────────────── */
+    html, body, .stApp {
+        background: var(--bg-primary) !important;
+        color: var(--text-primary) !important;
+    }
+    * {
+        font-family: 'Inter', -apple-system, sans-serif;
+    }
+    p, span, div, label, li { color: var(--text-primary); }
+    h1, h2, h3, h4, h5, h6 {
+        color: var(--text-primary) !important;
+        font-family: 'Inter', sans-serif !important;
+        font-weight: 700 !important;
+        letter-spacing: -0.01em;
+    }
+    a { color: var(--accent) !important; }
+
+    /* ── Huvudcontainer ───────────────────────────────────────────────────── */
+    .block-container { padding-top: 2rem; max-width: 1400px; }
+
+    /* ── Sidopanel ─────────────────────────────────────────────────────────── */
+    section[data-testid="stSidebar"] {
+        background: var(--bg-secondary) !important;
+        border-right: 1px solid var(--border-color);
+    }
+    section[data-testid="stSidebar"] * { color: var(--text-primary) !important; }
+    section[data-testid="stSidebar"] hr { border-color: var(--border-subtle); }
+
+    /* ── Knappar ───────────────────────────────────────────────────────────── */
+    .stButton button, .stDownloadButton button {
+        font-family: 'IBM Plex Mono', monospace !important;
+        font-size: 12px !important;
+        font-weight: 600 !important;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        background: var(--bg-tertiary) !important;
+        color: var(--text-primary) !important;
+        border: 1px solid var(--border-color) !important;
+        border-radius: 6px !important;
+        transition: all 0.15s ease;
+    }
+    .stButton button:hover, .stDownloadButton button:hover {
+        border-color: var(--accent) !important;
+        color: var(--accent) !important;
+        background: var(--bg-secondary) !important;
+    }
+    .stButton button[kind="primary"] {
+        background: var(--accent) !important;
+        color: #04120f !important;
+        border: 1px solid var(--accent) !important;
+    }
+    .stButton button[kind="primary"]:hover {
+        background: var(--accent-hover) !important;
+        border-color: var(--accent-hover) !important;
+    }
+    .stButton button:disabled {
+        opacity: 0.4 !important;
+        color: var(--text-secondary) !important;
+    }
+
+    /* ── Text-inputs, number, textarea, date ──────────────────────────────── */
+    .stTextInput input, .stNumberInput input, .stTextArea textarea,
+    .stDateInput input {
+        background: var(--bg-tertiary) !important;
+        color: var(--text-primary) !important;
+        border: 1px solid var(--border-color) !important;
+        border-radius: 6px !important;
+    }
+    .stTextInput input:focus, .stNumberInput input:focus,
+    .stTextArea textarea:focus, .stDateInput input:focus {
+        border-color: var(--accent) !important;
+        box-shadow: 0 0 0 1px var(--accent) !important;
+    }
+    .stTextInput input::placeholder, .stTextArea textarea::placeholder {
+        color: var(--text-secondary) !important;
+        opacity: 0.7;
+    }
+
+    /* ── Select / Multiselect ─────────────────────────────────────────────── */
+    div[data-baseweb="select"] > div {
+        background: var(--bg-tertiary) !important;
+        border-color: var(--border-color) !important;
+        color: var(--text-primary) !important;
+    }
+    div[data-baseweb="select"] span { color: var(--text-primary) !important; }
+    div[data-baseweb="popover"] {
+        background: var(--bg-secondary) !important;
+        border: 1px solid var(--border-color) !important;
+    }
+    ul[role="listbox"] { background: var(--bg-secondary) !important; }
+    ul[role="listbox"] li { color: var(--text-primary) !important; }
+    ul[role="listbox"] li:hover { background: var(--bg-tertiary) !important; }
+    div[data-baseweb="tag"] {
+        background: var(--accent) !important;
+        color: #04120f !important;
+    }
+
+    /* ── Slider ────────────────────────────────────────────────────────────── */
+    div[data-testid="stSlider"] [role="slider"] { background: var(--accent) !important; }
+
+    /* ── Checkbox / Radio / Toggle ─────────────────────────────────────────── */
+    .stCheckbox label, .stRadio label, .stToggle label { color: var(--text-primary) !important; }
+    .stCheckbox input:checked + div, [data-testid="stToggle"] div[aria-checked="true"] {
+        background: var(--accent) !important;
+    }
+
+    /* ── DataFrames / Tabeller ────────────────────────────────────────────── */
+    div[data-testid="stDataFrame"] {
+        border: 1px solid var(--border-color) !important;
+        border-radius: 6px !important;
+        overflow: hidden;
+    }
+    div[data-testid="stDataFrame"] * { color: var(--text-primary) !important; }
+
+    /* ── Expander ──────────────────────────────────────────────────────────── */
+    div[data-testid="stExpander"] {
+        background: var(--bg-secondary) !important;
+        border: 1px solid var(--border-subtle) !important;
+        border-radius: 8px !important;
+    }
+    div[data-testid="stExpander"] summary {
+        color: var(--text-primary) !important;
+        font-weight: 500;
+    }
+    div[data-testid="stExpander"] summary:hover { color: var(--accent) !important; }
+
+    /* ── Tabs ──────────────────────────────────────────────────────────────── */
+    button[data-baseweb="tab"] {
+        color: var(--text-secondary) !important;
+        font-family: 'IBM Plex Mono', monospace !important;
+        font-size: 12px !important;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    button[data-baseweb="tab"][aria-selected="true"] {
+        color: var(--accent) !important;
+        border-bottom-color: var(--accent) !important;
+    }
+    div[data-baseweb="tab-border"] { background: var(--border-subtle) !important; }
+    div[data-baseweb="tab-highlight"] { background: var(--accent) !important; }
+
+    /* ── Alerts (info/warning/error/success) ──────────────────────────────── */
+    div[data-testid="stAlert"] {
+        border-radius: 6px !important;
+        border: 1px solid var(--border-color) !important;
+    }
+    div[data-testid="stNotificationContentInfo"] { color: var(--text-primary) !important; }
+
+    /* ── Progress bar ──────────────────────────────────────────────────────── */
+    div[data-testid="stProgress"] > div > div { background: var(--accent) !important; }
+    div[data-testid="stProgress"] > div { background: var(--bg-tertiary) !important; }
+
+    /* ── Dividers ──────────────────────────────────────────────────────────── */
+    hr { border-color: var(--border-subtle) !important; }
+
+    /* ── Code blocks ───────────────────────────────────────────────────────── */
+    .stCodeBlock, pre, code {
+        background: var(--bg-primary) !important;
+        border: 1px solid var(--border-subtle) !important;
+        font-family: 'IBM Plex Mono', monospace !important;
+    }
+
+    /* ── Metrics (native st.metric) ────────────────────────────────────────── */
+    div[data-testid="stMetric"] {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-subtle);
+        border-radius: 8px;
+        padding: 10px 14px;
+    }
+    div[data-testid="stMetric"] label {
+        font-size: 11px !important;
+        color: var(--text-secondary) !important;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+    }
+    div[data-testid="stMetricValue"] {
+        font-size: 18px !important;
+        font-family: 'IBM Plex Mono', monospace !important;
+        color: var(--text-primary) !important;
+        font-weight: 600 !important;
+    }
+    div[data-testid="stMetricDelta"] { color: var(--accent) !important; }
+
+    /* ── Custom metric cards (lasttestresultat) ───────────────────────────── */
     .metric-card {
-        background: #161b22;
-        border: 1px solid #21262d;
-        border-radius: 6px;
-        padding: 16px 20px;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-subtle);
+        border-radius: 8px;
+        padding: 18px 20px;
         text-align: center;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.3);
     }
     .metric-value {
         font-family: 'IBM Plex Mono', monospace;
         font-size: 28px;
-        font-weight: 600;
-        color: #00d4aa;
+        font-weight: 700;
+        color: var(--accent);
         line-height: 1;
     }
     .metric-label {
         font-size: 11px;
         text-transform: uppercase;
         letter-spacing: 0.1em;
-        color: #8b949e;
-        margin-top: 6px;
+        color: var(--text-secondary);
+        margin-top: 8px;
     }
-    .metric-unit { font-size: 13px; color: #8b949e; margin-left: 3px; }
+    .metric-unit { font-size: 13px; color: var(--text-secondary); margin-left: 3px; }
 
+    /* ── Live-loggbox ──────────────────────────────────────────────────────── */
     .log-box {
-        background: #0d1117;
-        border: 1px solid #21262d;
-        border-radius: 6px;
+        background: var(--bg-primary);
+        border: 1px solid var(--border-subtle);
+        border-radius: 8px;
         padding: 12px 14px;
         font-family: 'IBM Plex Mono', monospace;
         font-size: 12px;
         height: 280px;
         overflow-y: auto;
-        color: #c9d1d9;
+        color: var(--text-primary);
         white-space: pre-wrap;
     }
 
-    div[data-testid="stSidebar"] { background: #0d1117; border-right: 1px solid #21262d; }
-    .stButton button {
-        font-family: 'IBM Plex Mono', monospace;
-        font-size: 12px;
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
+    /* ── Captions ──────────────────────────────────────────────────────────── */
+    .stCaption, [data-testid="stCaptionContainer"] {
+        color: var(--text-secondary) !important;
     }
 
-    /* Mindre metrics för query-statistik i loggsektionen */
-    div[data-testid="stMetric"] label {
-        font-size: 11px !important;
-    }
-    div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
-        font-size: 18px !important;
-    }
+    /* ── Scrollbar (polish) ────────────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: var(--bg-primary); }
+    ::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
 </style>
 """, unsafe_allow_html=True)
 
