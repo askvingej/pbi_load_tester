@@ -877,6 +877,174 @@
           "type": "number"
         }
       ]
+    },
+    "Enskild_hållplats-parametersatt": {
+      "dax": "DEFINE\n\tVAR __added_start_month = {{month}}\n\tVAR __added_end_month = __added_start_month + 1\n\tVAR __daygroup_name = \"{{daygroup_name}}\"\n\tVAR __day_of_month_end = {{day_of_month_end}}\n\tVAR __day_of_month_start = {{day_of_month_start}}\n\tVAR __line_description = {{line_description}}\n\tVAR __year = {{year}}\n\tVAR __intervall_traffic_frequency = \"{{intervall_traffic_frequency}}\"\n\tVAR __stop_point_name = \"{{stop_point_name}}\"\n\nVAR __DS0FilterTable =\n        TREATAS (\n            { \"Genomsnitt exkl. avgångar & stopp\" },\n            'Trafiktur aggregat exkl. avgångar & stopp'[Beräkna trafikturens...]\n        )\n    VAR __DS0FilterTable2 =\n        TREATAS ( { \"mm:ss\" }, 'Tidsformat'[Formatera sekunder som...] )\n    VAR __DS0FilterTable3 =\n        TREATAS ( { 0, BLANK () }, 'bus_departures_observed_imputed'[is_nulled] )\n    VAR __DS0FilterTable4 =\n        FILTER (\n            KEEPFILTERS ( VALUES ( 'bus_traffic_calendardate'[calendar_date] ) ),\n            AND (\n                'bus_traffic_calendardate'[calendar_date] >= DATE ( {{year}}, __added_start_month, 1 ),\n                'bus_traffic_calendardate'[calendar_date] < DATE ( {{year}}, __added_end_month, 1 )\n            )\n        )\n    VAR __DS0FilterTable5 =\n        TREATAS ( { \"{{stop_point_name}}\" }, 'bus_stop_point'[stop_point_name] )\n    VAR __DS0FilterTable6 =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_calendardate'[daygroup_name]\n        )\n    VAR __DS0FilterTable7 =\n        TREATAS ( { {{line_direction}} }, 'bus_line_direction_variant_number'[line_direction] )\n    VAR __ValueFilterDM4 =\n        FILTER (\n            KEEPFILTERS (\n                SUMMARIZECOLUMNS (\n                    'bus_line_hierarchy'[line_number],\n                    'bus_line_direction_variant_number'[variant_number],\n                    'bus_time'[hour_minute_formatted],\n                    __DS0FilterTable,\n                    __DS0FilterTable2,\n                    __DS0FilterTable3,\n                    __DS0FilterTable4,\n                    __DS0FilterTable5,\n                    __DS0FilterTable6,\n                    __DS0FilterTable7,\n                    \"planned_departure_time_local\", '_measures'[planned_departure_time_local],\n                    \"sum_diff_departure_time_s\", '_measures'[sum_diff_departure_time_s],\n                    \"sum_onboard_balanced_prev\", '_measures'[sum_onboard_balanced_prev],\n                    \"sum_boardings_balanced\", '_measures'[sum_boardings_balanced],\n                    \"sum_alightings_balanced\", '_measures'[sum_alightings_balanced],\n                    \"sum_onboard_balanced\", '_measures'[sum_onboard_balanced],\n                    \"count_observed_departures_excl_passthrough\", '_measures'[count_observed_departures_excl_passthrough]\n                )\n            ),\n            NOT ( ISBLANK ( [count_observed_departures_excl_passthrough] ) )\n        )\n    VAR __DS0Core =\n        SUMMARIZECOLUMNS (\n            ROLLUPADDISSUBTOTAL (\n                'bus_line_hierarchy'[line_number],\n                \"IsGrandTotalRowTotal\",\n                ROLLUPGROUP (\n                    'bus_line_direction_variant_number'[variant_number],\n                    'bus_time'[hour_minute_formatted]\n                ),\n                \"IsDM0Total\"\n            ),\n            __DS0FilterTable,\n            __DS0FilterTable2,\n            __DS0FilterTable3,\n            __DS0FilterTable4,\n            __DS0FilterTable5,\n            __DS0FilterTable6,\n            __DS0FilterTable7,\n            __ValueFilterDM4,\n            \"planned_departure_time_local\", '_measures'[planned_departure_time_local],\n            \"sum_diff_departure_time_s\", '_measures'[sum_diff_departure_time_s],\n            \"sum_onboard_balanced_prev\", '_measures'[sum_onboard_balanced_prev],\n            \"sum_boardings_balanced\", '_measures'[sum_boardings_balanced],\n            \"sum_alightings_balanced\", '_measures'[sum_alightings_balanced],\n            \"sum_onboard_balanced\", '_measures'[sum_onboard_balanced],\n            \"count_observed_departures_excl_passthrough\", '_measures'[count_observed_departures_excl_passthrough]\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN (\n            501,\n            __DS0Core,\n            [IsGrandTotalRowTotal], 1,\n            'bus_line_hierarchy'[line_number], 1,\n            [IsDM0Total], 1,\n            'bus_line_direction_variant_number'[variant_number], 1,\n            'bus_time'[hour_minute_formatted], 1\n        )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY\n    [IsGrandTotalRowTotal],\n    'bus_line_hierarchy'[line_number],\n    [IsDM0Total],\n    'bus_line_direction_variant_number'[variant_number],\n    'bus_time'[hour_minute_formatted]\n---\nDEFINE\n\tVAR __added_start_month = {{month}}\n\tVAR __added_end_month = __added_start_month + 1\n\tVAR __daygroup_name = \"{{daygroup_name}}\"\n\tVAR __day_of_month_end = {{day_of_month_end}}\n\tVAR __day_of_month_start = {{day_of_month_start}}\n\tVAR __line_description = {{line_description}}\n\tVAR __year = {{year}}\n\tVAR __intervall_traffic_frequency = \"{{intervall_traffic_frequency}}\"\n\tVAR __stop_point_name = \"{{stop_point_name}}\"\n\n    MEASURE '_measures'[_Placeholder vald linje] = ( \"-\" )\n    MEASURE '_measures'[_Valt stoppställe] =\n        ( SELECTEDVALUE ( bus_stop_point[stop_point_name] ) )\n    MEASURE '_measures'[_Placeholer] =\n        ( BLANK () )\n    MEASURE '_measures'[_Placeholer2] =\n        ( BLANK () )\n    MEASURE '_measures'[_Valt tidsintervall] =\n        (\n            \"Tidsintervall: \" & SELECTEDVALUE ( bus_time[intervall_traffic_hours] ) & \" \"\n                & CONCATENATEX (\n                    VALUES ( bus_traffic_calendardate[daygroup_name] ),\n                    bus_traffic_calendardate[daygroup_name],\n                    \", \"\n                )\n        )\n    MEASURE '_measures'[_Valt datumintervall] =\n        (\n            \"Datumintervall: \"\n                & FORMAT ( MIN ( bus_traffic_calendardate[calendar_date] ), \"YYYY-MM-DD\" ) & \" - \"\n                & FORMAT ( MAX ( bus_traffic_calendardate[calendar_date] ), \"YYYY-MM-DD\" ) & \" (\" & [_urval antal dygn] & \" dgr)\"\n        )\n    MEASURE '_measures'[_urval antal dygn] =\n        ( COUNTROWS ( bus_traffic_calendardate ) )\n    MEASURE '_measures'[_Valda perioder] =\n        (\n            VAR _trafficPeriod =\n                SELECTEDVALUE ( bus_traffic_period[traffic_period], \"\" )\n            VAR _headtrafficPeriodValue =\n                SELECTEDVALUE ( bus_traffic_period[headtimetable_period_code], \"\" )\n            VAR _headtrafficPeriodFormat =\n                IF ( _headtrafficPeriodValue = \"\", \"\", \", \" & _headtrafficPeriodValue )\n            VAR _allPeriods = _trafficPeriod & _headtrafficPeriodFormat\n            RETURN\n                IF ( _allPeriods = \"\", \"Ingen vald\", _allPeriods )\n        )\n    VAR __DS0FilterTable =\n        FILTER (\n            KEEPFILTERS ( VALUES ( 'bus_traffic_calendardate'[calendar_date] ) ),\n            AND (\n                'bus_traffic_calendardate'[calendar_date] >= DATE ( {{year}}, __added_start_month, 1 ),\n                'bus_traffic_calendardate'[calendar_date] < DATE ( {{year}}, __added_end_month, 1 )\n            )\n        )\n    VAR __DS0FilterTable2 =\n        TREATAS ( { \"{{stop_point_name}}\" }, 'bus_stop_point'[stop_point_name] )\n    VAR __DS0FilterTable3 =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_calendardate'[daygroup_name]\n        )\n    VAR __DS0FilterTable4 =\n        TREATAS ( { {{line_direction}} }, 'bus_line_direction_variant_number'[line_direction] )\n\nEVALUATE\nSUMMARIZECOLUMNS (\n    __DS0FilterTable,\n    __DS0FilterTable2,\n    __DS0FilterTable3,\n    __DS0FilterTable4,\n    \"_Placeholder vald linje\", IGNORE ( '_measures'[_Placeholder vald linje] ),\n    \"_Valt stoppställe\", IGNORE ( '_measures'[_Valt stoppställe] ),\n    \"_Placeholer\", IGNORE ( '_measures'[_Placeholer] ),\n    \"_Placeholer2\", IGNORE ( '_measures'[_Placeholer2] ),\n    \"_Valt tidsintervall\", IGNORE ( '_measures'[_Valt tidsintervall] ),\n    \"_Valt datumintervall\", IGNORE ( '_measures'[_Valt datumintervall] ),\n    \"_Valda perioder\", IGNORE ( '_measures'[_Valda perioder] ),\n    \"count_observed_departures_excl_passthrough\", IGNORE ( '_measures'[count_observed_departures_excl_passthrough] )\n)\n---\nDEFINE\n\tVAR __added_start_month = {{month}}\n\tVAR __added_end_month = __added_start_month + 1\n\tVAR __daygroup_name = \"{{daygroup_name}}\"\n\tVAR __day_of_month_end = {{day_of_month_end}}\n\tVAR __day_of_month_start = {{day_of_month_start}}\n\tVAR __line_description = {{line_description}}\n\tVAR __year = {{year}}\n\tVAR __intervall_traffic_frequency = \"{{intervall_traffic_frequency}}\"\n\tVAR __stop_point_name = \"{{stop_point_name}}\"\n\nVAR __DS0FilterTable =\n        FILTER (\n            KEEPFILTERS ( VALUES ( 'bus_traffic_calendardate'[calendar_date] ) ),\n            AND (\n                'bus_traffic_calendardate'[calendar_date] >= DATE ( {{year}}, __added_start_month, 1 ),\n                'bus_traffic_calendardate'[calendar_date] < DATE ( {{year}}, __added_end_month, 1 )\n            )\n        )\n    VAR __DS0FilterTable2 =\n        TREATAS ( { \"{{intervall_traffic_frequency}}\" }, 'bus_time'[intervall_traffic_frequency] )\n    VAR __DS0FilterTable3 =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_calendardate'[daygroup_name]\n        )\n    VAR __DS0FilterTable4 =\n        TREATAS ( { {{line_direction}} }, 'bus_line_direction_variant_number'[line_direction] )\n    VAR __DS0Core =\n        FILTER (\n            KEEPFILTERS (\n                CALCULATETABLE (\n                    ADDCOLUMNS (\n                        KEEPFILTERS ( VALUES ( 'bus_line_hierarchy'[line_description] ) ),\n                        \"count_trips\", '_measures'[count_trips]\n                    ),\n                    KEEPFILTERS ( __DS0FilterTable ),\n                    KEEPFILTERS ( __DS0FilterTable2 ),\n                    KEEPFILTERS ( __DS0FilterTable3 ),\n                    KEEPFILTERS ( __DS0FilterTable4 )\n                )\n            ),\n            NOT ( ISBLANK ( [count_trips] ) )\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN ( 101, __DS0Core, 'bus_line_hierarchy'[line_description], 1 )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY 'bus_line_hierarchy'[line_description]\n---\nDEFINE\n\tVAR __added_start_month = {{month}}\n\tVAR __added_end_month = __added_start_month + 1\n\tVAR __daygroup_name = \"{{daygroup_name}}\"\n\tVAR __day_of_month_end = {{day_of_month_end}}\n\tVAR __day_of_month_start = {{day_of_month_start}}\n\tVAR __line_description = {{line_description}}\n\tVAR __year = {{year}}\n\tVAR __intervall_traffic_frequency = \"{{intervall_traffic_frequency}}\"\n\tVAR __stop_point_name = \"{{stop_point_name}}\"\n\tVAR __stop_point_name_search = \"{{stop_point_name_search}}\"\n\nVAR __DS0FilterTable =\n        FILTER (\n            KEEPFILTERS ( VALUES ( 'bus_stop_point'[stop_point_name] ) ),\n            SEARCH ( \"{{stop_point_name_search}}\", 'bus_stop_point'[stop_point_name], 1, 0 ) >= 1\n        )\n    VAR __DS0FilterTable2 =\n        FILTER (\n            KEEPFILTERS ( VALUES ( 'bus_traffic_calendardate'[calendar_date] ) ),\n            AND (\n                'bus_traffic_calendardate'[calendar_date] >= DATE ( {{year}}, __added_start_month, 1 ),\n                'bus_traffic_calendardate'[calendar_date] < DATE ( {{year}}, __added_end_month, 1 )\n            )\n        )\n    VAR __DS0FilterTable3 =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_calendardate'[daygroup_name]\n        )\n    VAR __DS0FilterTable4 =\n        TREATAS ( { \"{{line_description}}\" }, 'bus_line_hierarchy'[line_description] )\n    VAR __DS0FilterTable5 =\n        TREATAS ( { {{line_direction}} }, 'bus_line_direction_variant_number'[line_direction] )\n    VAR __DS0Core =\n        FILTER (\n            KEEPFILTERS (\n                CALCULATETABLE (\n                    ADDCOLUMNS (\n                        KEEPFILTERS ( VALUES ( 'bus_stop_point'[stop_point_name] ) ),\n                        \"count_trips\", '_measures'[count_trips]\n                    ),\n                    KEEPFILTERS ( __DS0FilterTable ),\n                    KEEPFILTERS ( __DS0FilterTable2 ),\n                    KEEPFILTERS ( __DS0FilterTable3 ),\n                    KEEPFILTERS ( __DS0FilterTable4 ),\n                    KEEPFILTERS ( __DS0FilterTable5 )\n                )\n            ),\n            NOT ( ISBLANK ( [count_trips] ) )\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN ( 101, __DS0Core, 'bus_stop_point'[stop_point_name], 1 )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY 'bus_stop_point'[stop_point_name]\n---\nDEFINE\n\tVAR __added_start_month = {{month}}\n\tVAR __added_end_month = __added_start_month + 1\n\tVAR __daygroup_name = \"{{daygroup_name}}\"\n\tVAR __day_of_month_end = {{day_of_month_end}}\n\tVAR __day_of_month_start = {{day_of_month_start}}\n\tVAR __line_description = {{line_description}}\n\tVAR __year = {{year}}\n\tVAR __intervall_traffic_frequency = \"{{intervall_traffic_frequency}}\"\n\tVAR __stop_point_name = \"{{stop_point_name}}\"\n\tVAR __stop_point_name_search = \"{{stop_point_name_search}}\"\n\nVAR __DS0FilterTable =\n        FILTER (\n            KEEPFILTERS ( VALUES ( 'bus_traffic_calendardate'[calendar_date] ) ),\n            AND (\n                'bus_traffic_calendardate'[calendar_date] >= DATE ( {{year}}, __added_start_month, 1 ),\n                'bus_traffic_calendardate'[calendar_date] < DATE ( {{year}}, __added_end_month, 1 )\n            )\n        )\n    VAR __DS0FilterTable2 =\n        TREATAS ( { \"{{stop_point_name}}\" }, 'bus_stop_point'[stop_point_name] )\n    VAR __DS0FilterTable3 =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_calendardate'[daygroup_name]\n        )\n    VAR __DS0FilterTable4 =\n        TREATAS ( { \"{{line_description}}\" }, 'bus_line_hierarchy'[line_description] )\n    VAR __DS0FilterTable5 =\n        TREATAS ( { {{line_direction}} }, 'bus_line_direction_variant_number'[line_direction] )\n    VAR __DS0Core =\n        FILTER (\n            KEEPFILTERS (\n                CALCULATETABLE (\n                    ADDCOLUMNS (\n                        KEEPFILTERS ( VALUES ( 'bus_time'[intervall_traffic_hours] ) ),\n                        \"count_trips\", '_measures'[count_trips]\n                    ),\n                    KEEPFILTERS ( __DS0FilterTable ),\n                    KEEPFILTERS ( __DS0FilterTable2 ),\n                    KEEPFILTERS ( __DS0FilterTable3 ),\n                    KEEPFILTERS ( __DS0FilterTable5 )\n                )\n            ),\n            NOT ( ISBLANK ( [count_trips] ) )\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN ( 101, __DS0Core, 'bus_time'[intervall_traffic_hours], 1 )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY 'bus_time'[intervall_traffic_hours]\n---\nDEFINE\n\tVAR __added_start_month = {{month}}\n\tVAR __added_end_month = __added_start_month + 1\n\tVAR __daygroup_name = \"{{daygroup_name}}\"\n\tVAR __day_of_month_end = {{day_of_month_end}}\n\tVAR __day_of_month_start = {{day_of_month_start}}\n\tVAR __line_description = {{line_description}}\n\tVAR __year = {{year}}\n\tVAR __intervall_traffic_frequency = \"{{intervall_traffic_frequency}}\"\n\tVAR __stop_point_name = \"{{stop_point_name}}\"\n\tVAR __stop_point_name_search = \"{{stop_point_name_search}}\"\n\n\tVAR __DS0FilterTable =\n        FILTER (\n            KEEPFILTERS ( VALUES ( 'bus_line_hierarchy'[line_description] ) ),\n            AND (\n                SEARCH ( \"{{line_description}}\", 'bus_line_hierarchy'[line_description], 1, 0 ) >= 1,\n                'bus_line_hierarchy'[line_description] IN { \"{{line_description}}\" }\n            )\n        )\n    VAR __DS0FilterTable2 =\n        FILTER (\n            KEEPFILTERS ( VALUES ( 'bus_traffic_calendardate'[calendar_date] ) ),\n            AND (\n                'bus_traffic_calendardate'[calendar_date] >= DATE ( {{year}}, __added_start_month, 1 ),\n                'bus_traffic_calendardate'[calendar_date] < DATE ( {{year}}, __added_end_month, 1 )\n            )\n        )\n    VAR __DS0FilterTable3 =\n        TREATAS ( { \"{{stop_point_name}}\" }, 'bus_stop_point'[stop_point_name] )\n    VAR __DS0FilterTable4 =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_calendardate'[daygroup_name]\n        )\n    VAR __DS0Core =\n        FILTER (\n            KEEPFILTERS (\n                CALCULATETABLE (\n                    ADDCOLUMNS (\n                        KEEPFILTERS ( VALUES ( 'bus_line_direction_variant_number'[line_direction] ) ),\n                        \"count_trips\", '_measures'[count_trips]\n                    ),\n                    KEEPFILTERS ( __DS0FilterTable2 ),\n                    KEEPFILTERS ( __DS0FilterTable3 ),\n                    KEEPFILTERS ( __DS0FilterTable4 )\n                )\n            ),\n            NOT ( ISBLANK ( [count_trips] ) )\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN ( 101, __DS0Core, 'bus_line_direction_variant_number'[line_direction], 1 )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY 'bus_line_direction_variant_number'[line_direction]\n---\nDEFINE\n\tVAR __added_start_month = {{month}}\n\tVAR __added_end_month = __added_start_month + 1\n\tVAR __daygroup_name = \"{{daygroup_name}}\"\n\tVAR __day_of_month_end = {{day_of_month_end}}\n\tVAR __day_of_month_start = {{day_of_month_start}}\n\tVAR __line_description = {{line_description}}\n\tVAR __year = {{year}}\n\tVAR __intervall_traffic_frequency = \"{{intervall_traffic_frequency}}\"\n\tVAR __stop_point_name = \"{{stop_point_name}}\"\n\tVAR __stop_point_name_search = \"{{stop_point_name_search}}\"\n\n\tVAR __DS0FilterTable =\n        FILTER (\n            KEEPFILTERS ( VALUES ( 'bus_traffic_calendardate'[calendar_date] ) ),\n            AND (\n                'bus_traffic_calendardate'[calendar_date] >= DATE ( {{year}}, __added_start_month, 1 ),\n                'bus_traffic_calendardate'[calendar_date] < DATE ( {{year}}, __added_end_month, 1 )\n            )\n        )\n    VAR __DS0FilterTable2 =\n        TREATAS ( { \"{{stop_point_name}}\" }, 'bus_stop_point'[stop_point_name] )\n    VAR __DS0FilterTable3 =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_calendardate'[daygroup_name]\n        )\n    VAR __DS0FilterTable4 =\n        TREATAS ( { \"{{line_description}}\" }, 'bus_line_hierarchy'[line_description] )\n    VAR __DS0FilterTable5 =\n        TREATAS ( { {{line_direction}} }, 'bus_line_direction_variant_number'[line_direction] )\n    VAR __DS0Core =\n        FILTER (\n            KEEPFILTERS (\n                CALCULATETABLE (\n                    ADDCOLUMNS (\n                        KEEPFILTERS ( VALUES ( 'bus_time'[hour_minute_formatted] ) ),\n                        \"count_trips\", '_measures'[count_trips]\n                    ),\n                    KEEPFILTERS ( __DS0FilterTable ),\n                    KEEPFILTERS ( __DS0FilterTable2 ),\n                    KEEPFILTERS ( __DS0FilterTable3 ),\n                    KEEPFILTERS ( __DS0FilterTable5 )\n                )\n            ),\n            NOT ( ISBLANK ( [count_trips] ) )\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN ( 101, __DS0Core, 'bus_time'[hour_minute_formatted], 1 )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY 'bus_time'[hour_minute_formatted]\n\n",
+      "rls": {
+        "enabled": true,
+        "mode": "Flera användare (rotation)",
+        "users": [
+          {
+            "username": "sofia.rahlen@sl.se",
+            "roles": []
+          },
+          {
+            "username": "bjorn.marklund@sl.se",
+            "roles": []
+          },
+          {
+            "username": "anton.percy@sl.se",
+            "roles": []
+          },
+          {
+            "username": "peter.svahn@sl.se",
+            "roles": []
+          },
+          {
+            "username": "jerry.svensson@sl.se",
+            "roles": []
+          }
+        ]
+      },
+      "mode": "Flera queries (rotation)",
+      "params": [
+        {
+          "name": "day_of_month_end",
+          "mode": "Slumpa",
+          "values": [
+            "13",
+            "14",
+            "15",
+            "16",
+            "17",
+            "18",
+            "19",
+            "20",
+            "21",
+            "22",
+            "23"
+          ],
+          "type": "number"
+        },
+        {
+          "name": "day_of_month_start",
+          "mode": "Slumpa",
+          "values": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6"
+          ],
+          "type": "number"
+        },
+        {
+          "name": "daygroup_name",
+          "mode": "Slumpa",
+          "values": [
+            "Måndag-Torsdag",
+            "Fredagar",
+            "Lördagar",
+            "Sön- och helgdagar"
+          ],
+          "type": "text"
+        },
+        {
+          "name": "intervall_traffic_frequency",
+          "mode": "Slumpa",
+          "values": [
+            "Högtrafik",
+            "Lågtrafik",
+            "Nattrafik"
+          ],
+          "type": "text"
+        },
+        {
+          "name": "line_description",
+          "mode": "Slumpa",
+          "values": [
+            "816",
+            "532",
+            "4",
+            "1",
+            "179",
+            "3",
+            "6",
+            "172",
+            "2",
+            "5",
+            "607",
+            "50",
+            "178",
+            "173",
+            "471",
+            "474",
+            "176",
+            "177",
+            "676",
+            "61"
+          ],
+          "type": "number"
+        },
+        {
+          "name": "line_direction",
+          "mode": "Slumpa",
+          "values": [
+            "1",
+            "2"
+          ],
+          "type": "number"
+        },
+        {
+          "name": "month",
+          "mode": "Slumpa",
+          "values": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9",
+            "10",
+            "11"
+          ],
+          "type": "number"
+        },
+        {
+          "name": "stop_point_name",
+          "mode": "Slumpa",
+          "values": [
+            "Brommaplan",
+            "Norrtälje busstation",
+            "Alvik",
+            "Kebnekaisevägen"
+          ],
+          "type": "text"
+        },
+        {
+          "name": "stop_point_name_search",
+          "mode": "Slumpa",
+          "values": [
+            "a",
+            "b"
+          ],
+          "type": "text"
+        },
+        {
+          "name": "year",
+          "mode": "Slumpa",
+          "values": [
+            "2024",
+            "2025",
+            "2026"
+          ],
+          "type": "number"
+        }
+      ]
     }
   },
   "76de0ef2-b022-46e8-b005-42ddf5c4f2e7::f581333a-7d39-439a-ae1d-7a7ee45b0ccd": {
@@ -1333,6 +1501,322 @@
             "11"
           ],
           "type": "number"
+        },
+        {
+          "name": "year",
+          "mode": "Slumpa",
+          "values": [
+            "2024",
+            "2025",
+            "2026"
+          ],
+          "type": "number"
+        }
+      ]
+    },
+    "Hållplatsvis-parametersatt": {
+      "dax": "DEFINE\n\tVAR __added_start_month = {{month}}\n\tVAR __added_end_month = __added_start_month + 1\n\tVAR __daygroup_name = \"{{daygroup_name}}\"\n\tVAR __day_of_month_end = {{day_of_month_end}}\n\tVAR __day_of_month_start = {{day_of_month_start}}\n    VAR __DS0FilterTable =\n        TREATAS (\n            { \"Genomsnitt exkl. avgångar & stopp\" },\n            'Trafiktur aggregat exkl. avgångar & stopp'[Beräkna trafikturens...]\n        )\n    VAR __DS0FilterTable2 =\n        TREATAS (\n            { \"Genomsnitt avgångar & stopp\" },\n            'Trafiktur aggregat avgångar & stopp'[Beräkna trafikturens...]\n        )\n    VAR __DS0FilterTable3 =\n        TREATAS ( { \"mm:ss\" }, 'Tidsformat'[Formatera sekunder som...] )\n    VAR __DS0FilterTable4 =\n        FILTER (\n            KEEPFILTERS ( VALUES ( 'bus_stop_point'[stop_point_name] ) ),\n            NOT ( 'bus_stop_point'[stop_point_name] IN { \"Missing\", BLANK () } )\n        )\n    VAR __DS0FilterTable5 =\n        TREATAS ( { 0, BLANK () }, 'bus_departures_observed_imputed'[is_nulled] )\n    VAR __DS0FilterTable6 =\n        TREATAS ( { \"{{intervall_traffic_frequency}}\" }, 'bus_time'[intervall_traffic_frequency] )\n    VAR __DS0FilterTable7 =\n        FILTER (\n            KEEPFILTERS ( VALUES ( 'bus_traffic_calendardate'[calendar_date] ) ),\n            AND (\n                'bus_traffic_calendardate'[calendar_date] >= DATE ( {{year}}, __added_start_month, 1 ),\n                'bus_traffic_calendardate'[calendar_date] < DATE ( {{year}}, __added_end_month, 1 )\n            )\n        )\n    VAR __DS0FilterTable8 =\n        TREATAS ( { \"{{line_description}}\" }, 'bus_line_hierarchy'[line_description] )\n    VAR __DS0FilterTable9 =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_calendardate'[daygroup_name]\n        )\n    VAR __DS0FilterTable10 =\n        TREATAS ( { {{line_direction}} }, 'bus_line_direction_variant_number'[line_direction] )\n    VAR __DS0Core =\n        SUMMARIZECOLUMNS (\n            'bus_stops_observed_imputed'[stop_sequence_number],\n            'bus_stop_point'[stop_point_name],\n            __DS0FilterTable,\n            __DS0FilterTable2,\n            __DS0FilterTable3,\n            __DS0FilterTable4,\n            __DS0FilterTable5,\n            __DS0FilterTable6,\n            __DS0FilterTable7,\n            __DS0FilterTable8,\n            __DS0FilterTable9,\n            __DS0FilterTable10,\n            \"average_speed_odometer\", '_measures'[average_speed_odometer],\n            \"sum_run_time_between_planned_stops_s\", '_measures'[sum_run_time_between_planned_stops_s],\n            \"sum_run_time_since_last_stop_and_stop_time_minus_first_acc_s\", '_measures'[sum_run_time_since_last_stop_and_stop_time_minus_first_acc_s],\n            \"sum_dwell_time_s\", '_measures'[sum_dwell_time_s],\n            \"sum_stop_time_s\", '_measures'[sum_stop_time_s],\n            \"sum_boardings_balanced\", '_measures'[sum_boardings_balanced],\n            \"sum_alightings_balanced\", '_measures'[sum_alightings_balanced],\n            \"sum_onboard_balanced\", '_measures'[sum_onboard_balanced],\n            \"sum_observed_distance_m\", '_measures'[sum_observed_distance_m],\n            \"sum_distance_odometer_meters_acc_m\", '_measures'[sum_distance_odometer_meters_acc_m],\n            \"count_observed_departures_excl_passthrough\", '_measures'[count_observed_departures_excl_passthrough]\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN (\n            501,\n            __DS0Core,\n            'bus_stops_observed_imputed'[stop_sequence_number], 1,\n            'bus_stop_point'[stop_point_name], 1\n        )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY\n    'bus_stops_observed_imputed'[stop_sequence_number],\n    'bus_stop_point'[stop_point_name]\n---\nDEFINE\n\tVAR __added_start_month = {{month}}\n\tVAR __added_end_month = __added_start_month + 1\n    MEASURE '_measures'[_Vald linje] =\n        (\n            \"Linje: \"\n                & CONCATENATEX (\n                    VALUES ( bus_line_hierarchy[line_number] ),\n                    bus_line_hierarchy[line_number],\n                    \", \"\n                ) \n        )\n    MEASURE '_measures'[_Vald variant] =\n        (\n            \"Variant: \"\n                & SELECTEDVALUE ( bus_line_direction_variant_number[variant_number] ) & \": \" & [_Vald linjesträckning] \n        )\n    MEASURE '_measures'[_Vald linjesträckning] =\n        (\n            VAR _startStoppoint =\n                LOOKUPVALUE (\n                    bus_stop_point_planned_departure_start[stop_point_name],\n                    bus_stop_point_planned_departure_start[stop_point_key],\n                        SELECTEDVALUE ( bus_departures_observed_imputed[journey_departure_stop_point_key] )\n                )\n            VAR _endStoppoint =\n                LOOKUPVALUE (\n                    bus_stop_point_planned_departure_stop[stop_point_name],\n                    bus_stop_point_planned_departure_stop[stop_point_key],\n                        SELECTEDVALUE ( bus_departures_observed_imputed[journey_arrival_stop_point_key] )\n                )\n            RETURN\n                _startStoppoint & \" – \" & _endStoppoint \n        )\n    MEASURE '_measures'[_Placeholer] =\n        ( BLANK () \n        )\n    MEASURE '_measures'[_Placeholer2] =\n        ( BLANK () \n        )\n    MEASURE '_measures'[_Valt tidsintervall] =\n        (\n            \"Tidsintervall: \" & SELECTEDVALUE ( bus_time[intervall_traffic_hours] ) & \" \"\n                & CONCATENATEX (\n                    VALUES ( bus_traffic_calendardate[daygroup_name] ),\n                    bus_traffic_calendardate[daygroup_name],\n                    \", \"\n                ) \n        )\n    MEASURE '_measures'[_Valt datumintervall] =\n        (\n            \"Datumintervall: \"\n                & FORMAT ( MIN ( bus_traffic_calendardate[calendar_date] ), \"YYYY-MM-DD\" ) & \" - \"\n                & FORMAT ( MAX ( bus_traffic_calendardate[calendar_date] ), \"YYYY-MM-DD\" ) & \" (\" & [_urval antal dygn] & \" dgr)\" \n        )\n    MEASURE '_measures'[_urval antal dygn] =\n        ( COUNTROWS ( bus_traffic_calendardate ) \n        )\n    MEASURE '_measures'[_Valda perioder] =\n        (\n            VAR _trafficPeriod =\n                SELECTEDVALUE ( bus_traffic_period[traffic_period], \"\" )\n            VAR _headtrafficPeriodValue =\n                SELECTEDVALUE ( bus_traffic_period[headtimetable_period_code], \"\" )\n            VAR _headtrafficPeriodFormat =\n                IF ( _headtrafficPeriodValue = \"\", \"\", \", \" & _headtrafficPeriodValue )\n            VAR _allPeriods = _trafficPeriod & _headtrafficPeriodFormat\n            RETURN\n                IF ( _allPeriods = \"\", \"Ingen vald\", _allPeriods ) \n        )\n    VAR __DS0FilterTable =\n        TREATAS ( { \"15:00-17:59\" }, 'bus_time'[intervall_traffic_hours] )\n    VAR __DS0FilterTable2 =\n        FILTER (\n            KEEPFILTERS ( VALUES ( 'bus_traffic_calendardate'[calendar_date] ) ),\n            AND (\n                'bus_traffic_calendardate'[calendar_date] >= DATE ( {{year}}, __added_start_month, 1 ),\n                'bus_traffic_calendardate'[calendar_date] < DATE ( {{year}}, __added_end_month, 1 )\n            )\n        )\n    VAR __DS0FilterTable3 =\n        TREATAS ( { \"{{line_description}}\" }, 'bus_line_hierarchy'[line_description] )\n    VAR __DS0FilterTable4 =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_calendardate'[daygroup_name]\n        )\n    VAR __DS0FilterTable5 =\n        TREATAS (\n            { ( {{line_direction}}, 2 ) },\n            'bus_line_direction_variant_number'[line_direction],\n            'bus_line_direction_variant_number'[variant_number]\n        )\n\nEVALUATE\nSUMMARIZECOLUMNS (\n    __DS0FilterTable,\n    __DS0FilterTable2,\n    __DS0FilterTable3,\n    __DS0FilterTable4,\n    __DS0FilterTable5,\n    \"_Vald linje\", IGNORE ( '_measures'[_Vald linje] ),\n    \"_Vald variant\", IGNORE ( '_measures'[_Vald variant] ),\n    \"_Placeholer\", IGNORE ( '_measures'[_Placeholer] ),\n    \"_Placeholer2\", IGNORE ( '_measures'[_Placeholer2] ),\n    \"_Valt tidsintervall\", IGNORE ( '_measures'[_Valt tidsintervall] ),\n    \"_Valt datumintervall\", IGNORE ( '_measures'[_Valt datumintervall] ),\n    \"_Valda perioder\", IGNORE ( '_measures'[_Valda perioder] ),\n    \"count_observed_trips\", IGNORE ( '_measures'[count_observed_trips] )\n)\n---\nDEFINE\n\tVAR __added_start_month = {{month}}\n\tVAR __added_end_month = __added_start_month + 1\n    VAR __DS0FilterTable =\n        FILTER (\n            KEEPFILTERS ( VALUES ( 'bus_line_hierarchy'[line_description] ) ),\n            SEARCH ( \"{{line_description}}\", 'bus_line_hierarchy'[line_description], 1, 0 ) >= 1\n        )\n    VAR __DS0FilterTable2 =\n        TREATAS ( { \"{{intervall_traffic_frequency}}\" }, 'bus_time'[intervall_traffic_frequency] )\n    VAR __DS0FilterTable3 =\n        FILTER (\n            KEEPFILTERS ( VALUES ( 'bus_traffic_calendardate'[calendar_date] ) ),\n            AND (\n                'bus_traffic_calendardate'[calendar_date] >= DATE ( {{year}}, __added_start_month, 1 ),\n                'bus_traffic_calendardate'[calendar_date] < DATE ( {{year}}, __added_end_month, 1 )\n            )\n        )\n    VAR __DS0FilterTable4 =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_calendardate'[daygroup_name]\n        )\n    VAR __DS0FilterTable5 =\n        TREATAS (\n            { ( {{line_direction}}, 1 ) },\n            'bus_line_direction_variant_number'[line_direction],\n            'bus_line_direction_variant_number'[variant_number]\n        )\n    VAR __DS0Core =\n        FILTER (\n            KEEPFILTERS (\n                CALCULATETABLE (\n                    ADDCOLUMNS (\n                        KEEPFILTERS ( VALUES ( 'bus_line_hierarchy'[line_description] ) ),\n                        \"count_trips\", '_measures'[count_trips]\n                    ),\n                    KEEPFILTERS ( __DS0FilterTable ),\n                    KEEPFILTERS ( __DS0FilterTable2 ),\n                    KEEPFILTERS ( __DS0FilterTable3 ),\n                    KEEPFILTERS ( __DS0FilterTable4 ),\n                    KEEPFILTERS ( __DS0FilterTable5 )\n                )\n            ),\n            NOT ( ISBLANK ( [count_trips] ) )\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN ( 101, __DS0Core, 'bus_line_hierarchy'[line_description], 1 )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY 'bus_line_hierarchy'[line_description]\n---\nDEFINE\n\tVAR __added_start_month = {{month}}\n\tVAR __added_end_month = __added_start_month + 1\n    VAR __DS0FilterTable =\n        TREATAS ( { \"{{intervall_traffic_frequency}}\" }, 'bus_time'[intervall_traffic_frequency] )\n    VAR __DS0FilterTable2 =\n        FILTER (\n            KEEPFILTERS ( VALUES ( 'bus_traffic_calendardate'[calendar_date] ) ),\n            AND (\n                'bus_traffic_calendardate'[calendar_date] >= DATE ( {{year}}, __added_start_month, 1 ),\n                'bus_traffic_calendardate'[calendar_date] < DATE ( {{year}}, __added_end_month, 1 )\n            )\n        )\n    VAR __DS0FilterTable3 =\n        TREATAS ( { \"{{line_description}}\" }, 'bus_line_hierarchy'[line_description] )\n    VAR __DS0FilterTable4 =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_calendardate'[daygroup_name]\n        )\n    VAR __DS0FilterTable5 =\n        TREATAS ( { {{line_direction}} }, 'bus_line_direction_variant_number'[line_direction] )\n    VAR __DS0Core =\n        FILTER (\n            KEEPFILTERS (\n                CALCULATETABLE (\n                    ADDCOLUMNS (\n                        KEEPFILTERS ( VALUES ( 'bus_time'[hour_minute_formatted] ) ),\n                        \"count_trips\", '_measures'[count_trips]\n                    ),\n                    KEEPFILTERS ( __DS0FilterTable ),\n                    KEEPFILTERS ( __DS0FilterTable2 ),\n                    KEEPFILTERS ( __DS0FilterTable3 ),\n                    KEEPFILTERS ( __DS0FilterTable4 ),\n                    KEEPFILTERS ( __DS0FilterTable5 )\n                )\n            ),\n            NOT ( ISBLANK ( [count_trips] ) )\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN ( 101, __DS0Core, 'bus_time'[hour_minute_formatted], 1 )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY 'bus_time'[hour_minute_formatted]\n---\nDEFINE\n\tVAR __added_start_month = {{month}}\n\tVAR __added_end_month = __added_start_month + 1\n    VAR __DS0FilterTable =\n        TREATAS ( { \"{{intervall_traffic_frequency}}\" }, 'bus_time'[intervall_traffic_frequency] )\n    VAR __DS0FilterTable2 =\n        FILTER (\n            KEEPFILTERS ( VALUES ( 'bus_traffic_calendardate'[calendar_date] ) ),\n            AND (\n                'bus_traffic_calendardate'[calendar_date] >= DATE ( {{year}}, __added_start_month, 1 ),\n                'bus_traffic_calendardate'[calendar_date] < DATE ( {{year}}, __added_end_month, 1 )\n            )\n        )\n    VAR __DS0FilterTable3 =\n        TREATAS ( { \"{{line_description}}\" }, 'bus_line_hierarchy'[line_description] )\n    VAR __DS0FilterTable4 =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_calendardate'[daygroup_name]\n        )\n    VAR __DM3FilterTable =\n        TREATAS ( { {{line_direction}}, 2 }, 'bus_line_direction_variant_number'[line_direction] )\n    VAR __ValueFilterDM3 =\n        FILTER (\n            KEEPFILTERS (\n                CALCULATETABLE (\n                    ADDCOLUMNS (\n                        KEEPFILTERS (\n                            SUMMARIZE (\n                                VALUES ( 'bus_line_direction_variant_number' ),\n                                'bus_line_direction_variant_number'[line_direction],\n                                'bus_line_direction_variant_number'[variant_number]\n                            )\n                        ),\n                        \"count_trips\", '_measures'[count_trips]\n                    ),\n                    KEEPFILTERS ( __DS0FilterTable ),\n                    KEEPFILTERS ( __DS0FilterTable2 ),\n                    KEEPFILTERS ( __DS0FilterTable3 ),\n                    KEEPFILTERS ( __DS0FilterTable4 )\n                )\n            ),\n            NOT ( ISBLANK ( [count_trips] ) )\n        )\n    VAR __DS0Core =\n        SELECTCOLUMNS (\n            KEEPFILTERS (\n                SUMMARIZECOLUMNS (\n                    ROLLUPADDISSUBTOTAL (\n                        'bus_line_direction_variant_number'[line_direction],\n                        \"IsGrandTotalRowTotal\",\n                        'bus_line_direction_variant_number'[variant_number],\n                        \"IsDM1Total\",\n                        NONVISUAL ( __DM3FilterTable )\n                    ),\n                    __DS0FilterTable,\n                    __DS0FilterTable2,\n                    __DS0FilterTable3,\n                    __DS0FilterTable4,\n                    __ValueFilterDM3,\n                    \"CountRowsbus_line_direction_variant_number\", COUNTROWS ( 'bus_line_direction_variant_number' )\n                )\n            ),\n            \"'bus_line_direction_variant_number'[line_direction]\", 'bus_line_direction_variant_number'[line_direction],\n            \"'bus_line_direction_variant_number'[variant_number]\", 'bus_line_direction_variant_number'[variant_number],\n            \"IsGrandTotalRowTotal\", [IsGrandTotalRowTotal],\n            \"IsDM1Total\", [IsDM1Total]\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN (\n            502,\n            __DS0Core,\n            [IsGrandTotalRowTotal], 0,\n            'bus_line_direction_variant_number'[line_direction], 1,\n            [IsDM1Total], 0,\n            'bus_line_direction_variant_number'[variant_number], 1\n        )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY\n    [IsGrandTotalRowTotal] DESC,\n    'bus_line_direction_variant_number'[line_direction],\n    [IsDM1Total] DESC,\n    'bus_line_direction_variant_number'[variant_number]\n---\nDEFINE\n\tVAR __added_start_month = {{month}}\n\tVAR __added_end_month = __added_start_month + 1\n    VAR __DS0FilterTable =\n        FILTER (\n            KEEPFILTERS ( VALUES ( 'bus_traffic_calendardate'[calendar_date] ) ),\n            AND (\n                'bus_traffic_calendardate'[calendar_date] >= DATE ( {{year}}, __added_start_month, 1 ),\n                'bus_traffic_calendardate'[calendar_date] < DATE ( {{year}}, __added_end_month, 1 )\n            )\n        )\n    VAR __DS0FilterTable2 =\n        TREATAS ( { \"{{line_description}}\" }, 'bus_line_hierarchy'[line_description] )\n    VAR __DS0FilterTable3 =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_calendardate'[daygroup_name]\n        )\n    VAR __DS0FilterTable4 =\n        TREATAS ( { {{line_direction}} }, 'bus_line_direction_variant_number'[line_direction] )\n    VAR __DS0Core =\n        FILTER (\n            KEEPFILTERS (\n                CALCULATETABLE (\n                    ADDCOLUMNS (\n                        KEEPFILTERS ( VALUES ( 'bus_time'[intervall_traffic_hours] ) ),\n                        \"count_trips\", '_measures'[count_trips]\n                    ),\n                    KEEPFILTERS ( __DS0FilterTable ),\n                    KEEPFILTERS ( __DS0FilterTable2 ),\n                    KEEPFILTERS ( __DS0FilterTable3 ),\n                    KEEPFILTERS ( __DS0FilterTable4 )\n                )\n            ),\n            NOT ( ISBLANK ( [count_trips] ) )\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN ( 101, __DS0Core, 'bus_time'[intervall_traffic_hours], 1 )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY 'bus_time'[intervall_traffic_hours]\n---\nDEFINE\n\tVAR __added_start_month = {{month}}\n\tVAR __added_end_month = __added_start_month + 1\n    VAR __DS0FilterTable =\n        FILTER (\n            KEEPFILTERS ( VALUES ( 'bus_traffic_calendardate'[calendar_date] ) ),\n            AND (\n                'bus_traffic_calendardate'[calendar_date] >= DATE ( {{year}}, __added_start_month, 1 ),\n                'bus_traffic_calendardate'[calendar_date] < DATE ( {{year}}, __added_end_month, 1 )\n            )\n        )\n    VAR __DS0FilterTable2 =\n        TREATAS ( { \"{{line_description}}\" }, 'bus_line_hierarchy'[line_description] )\n    VAR __DS0FilterTable3 =\n        TREATAS (\n            { ( {{line_direction}}, 1 ) },\n            'bus_line_direction_variant_number'[line_direction],\n            'bus_line_direction_variant_number'[variant_number]\n        )\n    VAR __DS0Core =\n        FILTER (\n            KEEPFILTERS (\n                CALCULATETABLE (\n                    ADDCOLUMNS (\n                        KEEPFILTERS (\n                            SUMMARIZE (\n                                VALUES ( 'bus_traffic_calendardate' ),\n                                'bus_traffic_calendardate'[daygroup_name],\n                                'bus_traffic_calendardate'[daygroup_sort]\n                            )\n                        ),\n                        \"count_trips\", '_measures'[count_trips]\n                    ),\n                    KEEPFILTERS ( __DS0FilterTable ),\n                    KEEPFILTERS ( __DS0FilterTable2 ),\n                    KEEPFILTERS ( __DS0FilterTable3 )\n                )\n            ),\n            NOT ( ISBLANK ( [count_trips] ) )\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN (\n            101,\n            __DS0Core,\n            'bus_traffic_calendardate'[daygroup_sort], 1,\n            'bus_traffic_calendardate'[daygroup_name], 1\n        )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY\n    'bus_traffic_calendardate'[daygroup_sort],\n    'bus_traffic_calendardate'[daygroup_name]\n",
+      "rls": {
+        "enabled": true,
+        "mode": "Flera användare (rotation)",
+        "users": [
+          {
+            "username": "sofia.rahlen@sl.se",
+            "roles": []
+          },
+          {
+            "username": "bjorn.marklund@sl.se",
+            "roles": []
+          },
+          {
+            "username": "anton.percy@sl.se",
+            "roles": []
+          },
+          {
+            "username": "peter.svahn@sl.se",
+            "roles": []
+          },
+          {
+            "username": "jerry.svensson@sl.se",
+            "roles": []
+          }
+        ]
+      },
+      "mode": "Flera queries (rotation)",
+      "params": [
+        {
+          "name": "day_of_month_end",
+          "mode": "Slumpa",
+          "values": [
+            "13",
+            "14",
+            "15",
+            "16",
+            "17",
+            "18",
+            "19",
+            "20",
+            "21",
+            "22",
+            "23"
+          ],
+          "type": "number"
+        },
+        {
+          "name": "day_of_month_start",
+          "mode": "Slumpa",
+          "values": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6"
+          ],
+          "type": "number"
+        },
+        {
+          "name": "daygroup_name",
+          "mode": "Slumpa",
+          "values": [
+            "Måndag-Torsdag",
+            "Fredagar",
+            "Lördagar",
+            "Sön- och helgdagar"
+          ],
+          "type": "text"
+        },
+        {
+          "name": "intervall_traffic_frequency",
+          "mode": "Slumpa",
+          "values": [
+            "Högtrafik",
+            "Lågtrafik",
+            "Nattrafik"
+          ],
+          "type": "text"
+        },
+        {
+          "name": "line_description",
+          "mode": "Slumpa",
+          "values": [
+            "816",
+            "532",
+            "4",
+            "1",
+            "179",
+            "3",
+            "6",
+            "172",
+            "2",
+            "5",
+            "607",
+            "50",
+            "178",
+            "173",
+            "471",
+            "474",
+            "176",
+            "177",
+            "676",
+            "61"
+          ],
+          "type": "number"
+        },
+        {
+          "name": "line_direction",
+          "mode": "Slumpa",
+          "values": [
+            "1",
+            "2"
+          ],
+          "type": "number"
+        },
+        {
+          "name": "month",
+          "mode": "Slumpa",
+          "values": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9",
+            "10",
+            "11"
+          ],
+          "type": "number"
+        },
+        {
+          "name": "year",
+          "mode": "Slumpa",
+          "values": [
+            "2024",
+            "2025",
+            "2026"
+          ],
+          "type": "number"
+        }
+      ]
+    },
+    "Enskild_hållplats-parametersatt": {
+      "dax": "DEFINE\n\tVAR __added_start_month = {{month}}\n\tVAR __added_end_month = __added_start_month + 1\n\tVAR __daygroup_name = \"{{daygroup_name}}\"\n\tVAR __day_of_month_end = {{day_of_month_end}}\n\tVAR __day_of_month_start = {{day_of_month_start}}\n\tVAR __line_description = {{line_description}}\n\tVAR __year = {{year}}\n\tVAR __intervall_traffic_frequency = \"{{intervall_traffic_frequency}}\"\n\tVAR __stop_point_name = \"{{stop_point_name}}\"\n\nVAR __DS0FilterTable =\n        TREATAS (\n            { \"Genomsnitt exkl. avgångar & stopp\" },\n            'Trafiktur aggregat exkl. avgångar & stopp'[Beräkna trafikturens...]\n        )\n    VAR __DS0FilterTable2 =\n        TREATAS ( { \"mm:ss\" }, 'Tidsformat'[Formatera sekunder som...] )\n    VAR __DS0FilterTable3 =\n        TREATAS ( { 0, BLANK () }, 'bus_departures_observed_imputed'[is_nulled] )\n    VAR __DS0FilterTable4 =\n        FILTER (\n            KEEPFILTERS ( VALUES ( 'bus_traffic_calendardate'[calendar_date] ) ),\n            AND (\n                'bus_traffic_calendardate'[calendar_date] >= DATE ( {{year}}, __added_start_month, 1 ),\n                'bus_traffic_calendardate'[calendar_date] < DATE ( {{year}}, __added_end_month, 1 )\n            )\n        )\n    VAR __DS0FilterTable5 =\n        TREATAS ( { \"{{stop_point_name}}\" }, 'bus_stop_point'[stop_point_name] )\n    VAR __DS0FilterTable6 =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_calendardate'[daygroup_name]\n        )\n    VAR __DS0FilterTable7 =\n        TREATAS ( { {{line_direction}} }, 'bus_line_direction_variant_number'[line_direction] )\n    VAR __ValueFilterDM4 =\n        FILTER (\n            KEEPFILTERS (\n                SUMMARIZECOLUMNS (\n                    'bus_line_hierarchy'[line_number],\n                    'bus_line_direction_variant_number'[variant_number],\n                    'bus_time'[hour_minute_formatted],\n                    __DS0FilterTable,\n                    __DS0FilterTable2,\n                    __DS0FilterTable3,\n                    __DS0FilterTable4,\n                    __DS0FilterTable5,\n                    __DS0FilterTable6,\n                    __DS0FilterTable7,\n                    \"planned_departure_time_local\", '_measures'[planned_departure_time_local],\n                    \"sum_diff_departure_time_s\", '_measures'[sum_diff_departure_time_s],\n                    \"sum_onboard_balanced_prev\", '_measures'[sum_onboard_balanced_prev],\n                    \"sum_boardings_balanced\", '_measures'[sum_boardings_balanced],\n                    \"sum_alightings_balanced\", '_measures'[sum_alightings_balanced],\n                    \"sum_onboard_balanced\", '_measures'[sum_onboard_balanced],\n                    \"count_observed_departures_excl_passthrough\", '_measures'[count_observed_departures_excl_passthrough]\n                )\n            ),\n            NOT ( ISBLANK ( [count_observed_departures_excl_passthrough] ) )\n        )\n    VAR __DS0Core =\n        SUMMARIZECOLUMNS (\n            ROLLUPADDISSUBTOTAL (\n                'bus_line_hierarchy'[line_number],\n                \"IsGrandTotalRowTotal\",\n                ROLLUPGROUP (\n                    'bus_line_direction_variant_number'[variant_number],\n                    'bus_time'[hour_minute_formatted]\n                ),\n                \"IsDM0Total\"\n            ),\n            __DS0FilterTable,\n            __DS0FilterTable2,\n            __DS0FilterTable3,\n            __DS0FilterTable4,\n            __DS0FilterTable5,\n            __DS0FilterTable6,\n            __DS0FilterTable7,\n            __ValueFilterDM4,\n            \"planned_departure_time_local\", '_measures'[planned_departure_time_local],\n            \"sum_diff_departure_time_s\", '_measures'[sum_diff_departure_time_s],\n            \"sum_onboard_balanced_prev\", '_measures'[sum_onboard_balanced_prev],\n            \"sum_boardings_balanced\", '_measures'[sum_boardings_balanced],\n            \"sum_alightings_balanced\", '_measures'[sum_alightings_balanced],\n            \"sum_onboard_balanced\", '_measures'[sum_onboard_balanced],\n            \"count_observed_departures_excl_passthrough\", '_measures'[count_observed_departures_excl_passthrough]\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN (\n            501,\n            __DS0Core,\n            [IsGrandTotalRowTotal], 1,\n            'bus_line_hierarchy'[line_number], 1,\n            [IsDM0Total], 1,\n            'bus_line_direction_variant_number'[variant_number], 1,\n            'bus_time'[hour_minute_formatted], 1\n        )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY\n    [IsGrandTotalRowTotal],\n    'bus_line_hierarchy'[line_number],\n    [IsDM0Total],\n    'bus_line_direction_variant_number'[variant_number],\n    'bus_time'[hour_minute_formatted]\n---\nDEFINE\n\tVAR __added_start_month = {{month}}\n\tVAR __added_end_month = __added_start_month + 1\n\tVAR __daygroup_name = \"{{daygroup_name}}\"\n\tVAR __day_of_month_end = {{day_of_month_end}}\n\tVAR __day_of_month_start = {{day_of_month_start}}\n\tVAR __line_description = {{line_description}}\n\tVAR __year = {{year}}\n\tVAR __intervall_traffic_frequency = \"{{intervall_traffic_frequency}}\"\n\tVAR __stop_point_name = \"{{stop_point_name}}\"\n\n    MEASURE '_measures'[_Placeholder vald linje] = ( \"-\" )\n    MEASURE '_measures'[_Valt stoppställe] =\n        ( SELECTEDVALUE ( bus_stop_point[stop_point_name] ) )\n    MEASURE '_measures'[_Placeholer] =\n        ( BLANK () )\n    MEASURE '_measures'[_Placeholer2] =\n        ( BLANK () )\n    MEASURE '_measures'[_Valt tidsintervall] =\n        (\n            \"Tidsintervall: \" & SELECTEDVALUE ( bus_time[intervall_traffic_hours] ) & \" \"\n                & CONCATENATEX (\n                    VALUES ( bus_traffic_calendardate[daygroup_name] ),\n                    bus_traffic_calendardate[daygroup_name],\n                    \", \"\n                )\n        )\n    MEASURE '_measures'[_Valt datumintervall] =\n        (\n            \"Datumintervall: \"\n                & FORMAT ( MIN ( bus_traffic_calendardate[calendar_date] ), \"YYYY-MM-DD\" ) & \" - \"\n                & FORMAT ( MAX ( bus_traffic_calendardate[calendar_date] ), \"YYYY-MM-DD\" ) & \" (\" & [_urval antal dygn] & \" dgr)\"\n        )\n    MEASURE '_measures'[_urval antal dygn] =\n        ( COUNTROWS ( bus_traffic_calendardate ) )\n    MEASURE '_measures'[_Valda perioder] =\n        (\n            VAR _trafficPeriod =\n                SELECTEDVALUE ( bus_traffic_period[traffic_period], \"\" )\n            VAR _headtrafficPeriodValue =\n                SELECTEDVALUE ( bus_traffic_period[headtimetable_period_code], \"\" )\n            VAR _headtrafficPeriodFormat =\n                IF ( _headtrafficPeriodValue = \"\", \"\", \", \" & _headtrafficPeriodValue )\n            VAR _allPeriods = _trafficPeriod & _headtrafficPeriodFormat\n            RETURN\n                IF ( _allPeriods = \"\", \"Ingen vald\", _allPeriods )\n        )\n    VAR __DS0FilterTable =\n        FILTER (\n            KEEPFILTERS ( VALUES ( 'bus_traffic_calendardate'[calendar_date] ) ),\n            AND (\n                'bus_traffic_calendardate'[calendar_date] >= DATE ( {{year}}, __added_start_month, 1 ),\n                'bus_traffic_calendardate'[calendar_date] < DATE ( {{year}}, __added_end_month, 1 )\n            )\n        )\n    VAR __DS0FilterTable2 =\n        TREATAS ( { \"{{stop_point_name}}\" }, 'bus_stop_point'[stop_point_name] )\n    VAR __DS0FilterTable3 =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_calendardate'[daygroup_name]\n        )\n    VAR __DS0FilterTable4 =\n        TREATAS ( { {{line_direction}} }, 'bus_line_direction_variant_number'[line_direction] )\n\nEVALUATE\nSUMMARIZECOLUMNS (\n    __DS0FilterTable,\n    __DS0FilterTable2,\n    __DS0FilterTable3,\n    __DS0FilterTable4,\n    \"_Placeholder vald linje\", IGNORE ( '_measures'[_Placeholder vald linje] ),\n    \"_Valt stoppställe\", IGNORE ( '_measures'[_Valt stoppställe] ),\n    \"_Placeholer\", IGNORE ( '_measures'[_Placeholer] ),\n    \"_Placeholer2\", IGNORE ( '_measures'[_Placeholer2] ),\n    \"_Valt tidsintervall\", IGNORE ( '_measures'[_Valt tidsintervall] ),\n    \"_Valt datumintervall\", IGNORE ( '_measures'[_Valt datumintervall] ),\n    \"_Valda perioder\", IGNORE ( '_measures'[_Valda perioder] ),\n    \"count_observed_departures_excl_passthrough\", IGNORE ( '_measures'[count_observed_departures_excl_passthrough] )\n)\n---\nDEFINE\n\tVAR __added_start_month = {{month}}\n\tVAR __added_end_month = __added_start_month + 1\n\tVAR __daygroup_name = \"{{daygroup_name}}\"\n\tVAR __day_of_month_end = {{day_of_month_end}}\n\tVAR __day_of_month_start = {{day_of_month_start}}\n\tVAR __line_description = {{line_description}}\n\tVAR __year = {{year}}\n\tVAR __intervall_traffic_frequency = \"{{intervall_traffic_frequency}}\"\n\tVAR __stop_point_name = \"{{stop_point_name}}\"\n\nVAR __DS0FilterTable =\n        FILTER (\n            KEEPFILTERS ( VALUES ( 'bus_traffic_calendardate'[calendar_date] ) ),\n            AND (\n                'bus_traffic_calendardate'[calendar_date] >= DATE ( {{year}}, __added_start_month, 1 ),\n                'bus_traffic_calendardate'[calendar_date] < DATE ( {{year}}, __added_end_month, 1 )\n            )\n        )\n    VAR __DS0FilterTable2 =\n        TREATAS ( { \"{{intervall_traffic_frequency}}\" }, 'bus_time'[intervall_traffic_frequency] )\n    VAR __DS0FilterTable3 =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_calendardate'[daygroup_name]\n        )\n    VAR __DS0FilterTable4 =\n        TREATAS ( { {{line_direction}} }, 'bus_line_direction_variant_number'[line_direction] )\n    VAR __DS0Core =\n        FILTER (\n            KEEPFILTERS (\n                CALCULATETABLE (\n                    ADDCOLUMNS (\n                        KEEPFILTERS ( VALUES ( 'bus_line_hierarchy'[line_description] ) ),\n                        \"count_trips\", '_measures'[count_trips]\n                    ),\n                    KEEPFILTERS ( __DS0FilterTable ),\n                    KEEPFILTERS ( __DS0FilterTable2 ),\n                    KEEPFILTERS ( __DS0FilterTable3 ),\n                    KEEPFILTERS ( __DS0FilterTable4 )\n                )\n            ),\n            NOT ( ISBLANK ( [count_trips] ) )\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN ( 101, __DS0Core, 'bus_line_hierarchy'[line_description], 1 )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY 'bus_line_hierarchy'[line_description]\n---\nDEFINE\n\tVAR __added_start_month = {{month}}\n\tVAR __added_end_month = __added_start_month + 1\n\tVAR __daygroup_name = \"{{daygroup_name}}\"\n\tVAR __day_of_month_end = {{day_of_month_end}}\n\tVAR __day_of_month_start = {{day_of_month_start}}\n\tVAR __line_description = {{line_description}}\n\tVAR __year = {{year}}\n\tVAR __intervall_traffic_frequency = \"{{intervall_traffic_frequency}}\"\n\tVAR __stop_point_name = \"{{stop_point_name}}\"\n\tVAR __stop_point_name_search = \"{{stop_point_name_search}}\"\n\nVAR __DS0FilterTable =\n        FILTER (\n            KEEPFILTERS ( VALUES ( 'bus_stop_point'[stop_point_name] ) ),\n            SEARCH ( \"{{stop_point_name_search}}\", 'bus_stop_point'[stop_point_name], 1, 0 ) >= 1\n        )\n    VAR __DS0FilterTable2 =\n        FILTER (\n            KEEPFILTERS ( VALUES ( 'bus_traffic_calendardate'[calendar_date] ) ),\n            AND (\n                'bus_traffic_calendardate'[calendar_date] >= DATE ( {{year}}, __added_start_month, 1 ),\n                'bus_traffic_calendardate'[calendar_date] < DATE ( {{year}}, __added_end_month, 1 )\n            )\n        )\n    VAR __DS0FilterTable3 =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_calendardate'[daygroup_name]\n        )\n    VAR __DS0FilterTable4 =\n        TREATAS ( { \"{{line_description}}\" }, 'bus_line_hierarchy'[line_description] )\n    VAR __DS0FilterTable5 =\n        TREATAS ( { {{line_direction}} }, 'bus_line_direction_variant_number'[line_direction] )\n    VAR __DS0Core =\n        FILTER (\n            KEEPFILTERS (\n                CALCULATETABLE (\n                    ADDCOLUMNS (\n                        KEEPFILTERS ( VALUES ( 'bus_stop_point'[stop_point_name] ) ),\n                        \"count_trips\", '_measures'[count_trips]\n                    ),\n                    KEEPFILTERS ( __DS0FilterTable ),\n                    KEEPFILTERS ( __DS0FilterTable2 ),\n                    KEEPFILTERS ( __DS0FilterTable3 ),\n                    KEEPFILTERS ( __DS0FilterTable4 ),\n                    KEEPFILTERS ( __DS0FilterTable5 )\n                )\n            ),\n            NOT ( ISBLANK ( [count_trips] ) )\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN ( 101, __DS0Core, 'bus_stop_point'[stop_point_name], 1 )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY 'bus_stop_point'[stop_point_name]\n---\nDEFINE\n\tVAR __added_start_month = {{month}}\n\tVAR __added_end_month = __added_start_month + 1\n\tVAR __daygroup_name = \"{{daygroup_name}}\"\n\tVAR __day_of_month_end = {{day_of_month_end}}\n\tVAR __day_of_month_start = {{day_of_month_start}}\n\tVAR __line_description = {{line_description}}\n\tVAR __year = {{year}}\n\tVAR __intervall_traffic_frequency = \"{{intervall_traffic_frequency}}\"\n\tVAR __stop_point_name = \"{{stop_point_name}}\"\n\tVAR __stop_point_name_search = \"{{stop_point_name_search}}\"\n\nVAR __DS0FilterTable =\n        FILTER (\n            KEEPFILTERS ( VALUES ( 'bus_traffic_calendardate'[calendar_date] ) ),\n            AND (\n                'bus_traffic_calendardate'[calendar_date] >= DATE ( {{year}}, __added_start_month, 1 ),\n                'bus_traffic_calendardate'[calendar_date] < DATE ( {{year}}, __added_end_month, 1 )\n            )\n        )\n    VAR __DS0FilterTable2 =\n        TREATAS ( { \"{{stop_point_name}}\" }, 'bus_stop_point'[stop_point_name] )\n    VAR __DS0FilterTable3 =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_calendardate'[daygroup_name]\n        )\n    VAR __DS0FilterTable4 =\n        TREATAS ( { \"{{line_description}}\" }, 'bus_line_hierarchy'[line_description] )\n    VAR __DS0FilterTable5 =\n        TREATAS ( { {{line_direction}} }, 'bus_line_direction_variant_number'[line_direction] )\n    VAR __DS0Core =\n        FILTER (\n            KEEPFILTERS (\n                CALCULATETABLE (\n                    ADDCOLUMNS (\n                        KEEPFILTERS ( VALUES ( 'bus_time'[intervall_traffic_hours] ) ),\n                        \"count_trips\", '_measures'[count_trips]\n                    ),\n                    KEEPFILTERS ( __DS0FilterTable ),\n                    KEEPFILTERS ( __DS0FilterTable2 ),\n                    KEEPFILTERS ( __DS0FilterTable3 ),\n                    KEEPFILTERS ( __DS0FilterTable5 )\n                )\n            ),\n            NOT ( ISBLANK ( [count_trips] ) )\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN ( 101, __DS0Core, 'bus_time'[intervall_traffic_hours], 1 )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY 'bus_time'[intervall_traffic_hours]\n---\nDEFINE\n\tVAR __added_start_month = {{month}}\n\tVAR __added_end_month = __added_start_month + 1\n\tVAR __daygroup_name = \"{{daygroup_name}}\"\n\tVAR __day_of_month_end = {{day_of_month_end}}\n\tVAR __day_of_month_start = {{day_of_month_start}}\n\tVAR __line_description = {{line_description}}\n\tVAR __year = {{year}}\n\tVAR __intervall_traffic_frequency = \"{{intervall_traffic_frequency}}\"\n\tVAR __stop_point_name = \"{{stop_point_name}}\"\n\tVAR __stop_point_name_search = \"{{stop_point_name_search}}\"\n\n\tVAR __DS0FilterTable =\n        FILTER (\n            KEEPFILTERS ( VALUES ( 'bus_line_hierarchy'[line_description] ) ),\n            AND (\n                SEARCH ( \"{{line_description}}\", 'bus_line_hierarchy'[line_description], 1, 0 ) >= 1,\n                'bus_line_hierarchy'[line_description] IN { \"{{line_description}}\" }\n            )\n        )\n    VAR __DS0FilterTable2 =\n        FILTER (\n            KEEPFILTERS ( VALUES ( 'bus_traffic_calendardate'[calendar_date] ) ),\n            AND (\n                'bus_traffic_calendardate'[calendar_date] >= DATE ( {{year}}, __added_start_month, 1 ),\n                'bus_traffic_calendardate'[calendar_date] < DATE ( {{year}}, __added_end_month, 1 )\n            )\n        )\n    VAR __DS0FilterTable3 =\n        TREATAS ( { \"{{stop_point_name}}\" }, 'bus_stop_point'[stop_point_name] )\n    VAR __DS0FilterTable4 =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_calendardate'[daygroup_name]\n        )\n    VAR __DS0Core =\n        FILTER (\n            KEEPFILTERS (\n                CALCULATETABLE (\n                    ADDCOLUMNS (\n                        KEEPFILTERS ( VALUES ( 'bus_line_direction_variant_number'[line_direction] ) ),\n                        \"count_trips\", '_measures'[count_trips]\n                    ),\n                    KEEPFILTERS ( __DS0FilterTable2 ),\n                    KEEPFILTERS ( __DS0FilterTable3 ),\n                    KEEPFILTERS ( __DS0FilterTable4 )\n                )\n            ),\n            NOT ( ISBLANK ( [count_trips] ) )\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN ( 101, __DS0Core, 'bus_line_direction_variant_number'[line_direction], 1 )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY 'bus_line_direction_variant_number'[line_direction]\n---\nDEFINE\n\tVAR __added_start_month = {{month}}\n\tVAR __added_end_month = __added_start_month + 1\n\tVAR __daygroup_name = \"{{daygroup_name}}\"\n\tVAR __day_of_month_end = {{day_of_month_end}}\n\tVAR __day_of_month_start = {{day_of_month_start}}\n\tVAR __line_description = {{line_description}}\n\tVAR __year = {{year}}\n\tVAR __intervall_traffic_frequency = \"{{intervall_traffic_frequency}}\"\n\tVAR __stop_point_name = \"{{stop_point_name}}\"\n\tVAR __stop_point_name_search = \"{{stop_point_name_search}}\"\n\n\tVAR __DS0FilterTable =\n        FILTER (\n            KEEPFILTERS ( VALUES ( 'bus_traffic_calendardate'[calendar_date] ) ),\n            AND (\n                'bus_traffic_calendardate'[calendar_date] >= DATE ( {{year}}, __added_start_month, 1 ),\n                'bus_traffic_calendardate'[calendar_date] < DATE ( {{year}}, __added_end_month, 1 )\n            )\n        )\n    VAR __DS0FilterTable2 =\n        TREATAS ( { \"{{stop_point_name}}\" }, 'bus_stop_point'[stop_point_name] )\n    VAR __DS0FilterTable3 =\n        TREATAS (\n            { \"{{daygroup_name}}\" },\n            'bus_traffic_calendardate'[daygroup_name]\n        )\n    VAR __DS0FilterTable4 =\n        TREATAS ( { \"{{line_description}}\" }, 'bus_line_hierarchy'[line_description] )\n    VAR __DS0FilterTable5 =\n        TREATAS ( { {{line_direction}} }, 'bus_line_direction_variant_number'[line_direction] )\n    VAR __DS0Core =\n        FILTER (\n            KEEPFILTERS (\n                CALCULATETABLE (\n                    ADDCOLUMNS (\n                        KEEPFILTERS ( VALUES ( 'bus_time'[hour_minute_formatted] ) ),\n                        \"count_trips\", '_measures'[count_trips]\n                    ),\n                    KEEPFILTERS ( __DS0FilterTable ),\n                    KEEPFILTERS ( __DS0FilterTable2 ),\n                    KEEPFILTERS ( __DS0FilterTable3 ),\n                    KEEPFILTERS ( __DS0FilterTable5 )\n                )\n            ),\n            NOT ( ISBLANK ( [count_trips] ) )\n        )\n    VAR __DS0PrimaryWindowed =\n        TOPN ( 101, __DS0Core, 'bus_time'[hour_minute_formatted], 1 )\n\nEVALUATE\n__DS0PrimaryWindowed\nORDER BY 'bus_time'[hour_minute_formatted]\n\n",
+      "rls": {
+        "enabled": true,
+        "mode": "Flera användare (rotation)",
+        "users": [
+          {
+            "username": "sofia.rahlen@sl.se",
+            "roles": []
+          },
+          {
+            "username": "bjorn.marklund@sl.se",
+            "roles": []
+          },
+          {
+            "username": "anton.percy@sl.se",
+            "roles": []
+          },
+          {
+            "username": "peter.svahn@sl.se",
+            "roles": []
+          },
+          {
+            "username": "jerry.svensson@sl.se",
+            "roles": []
+          }
+        ]
+      },
+      "mode": "Flera queries (rotation)",
+      "params": [
+        {
+          "name": "day_of_month_end",
+          "mode": "Slumpa",
+          "values": [
+            "13",
+            "14",
+            "15",
+            "16",
+            "17",
+            "18",
+            "19",
+            "20",
+            "21",
+            "22",
+            "23"
+          ],
+          "type": "number"
+        },
+        {
+          "name": "day_of_month_start",
+          "mode": "Slumpa",
+          "values": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6"
+          ],
+          "type": "number"
+        },
+        {
+          "name": "daygroup_name",
+          "mode": "Slumpa",
+          "values": [
+            "Måndag-Torsdag",
+            "Fredagar",
+            "Lördagar",
+            "Sön- och helgdagar"
+          ],
+          "type": "text"
+        },
+        {
+          "name": "intervall_traffic_frequency",
+          "mode": "Slumpa",
+          "values": [
+            "Högtrafik",
+            "Lågtrafik",
+            "Nattrafik"
+          ],
+          "type": "text"
+        },
+        {
+          "name": "line_description",
+          "mode": "Slumpa",
+          "values": [
+            "816",
+            "532",
+            "4",
+            "1",
+            "179",
+            "3",
+            "6",
+            "172",
+            "2",
+            "5",
+            "607",
+            "50",
+            "178",
+            "173",
+            "471",
+            "474",
+            "176",
+            "177",
+            "676",
+            "61"
+          ],
+          "type": "number"
+        },
+        {
+          "name": "line_direction",
+          "mode": "Slumpa",
+          "values": [
+            "1",
+            "2"
+          ],
+          "type": "number"
+        },
+        {
+          "name": "month",
+          "mode": "Slumpa",
+          "values": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9",
+            "10",
+            "11"
+          ],
+          "type": "number"
+        },
+        {
+          "name": "stop_point_name",
+          "mode": "Slumpa",
+          "values": [
+            "Brommaplan",
+            "Norrtälje busstation",
+            "Alvik",
+            "Kebnekaisevägen"
+          ],
+          "type": "text"
+        },
+        {
+          "name": "stop_point_name_search",
+          "mode": "Slumpa",
+          "values": [
+            "a",
+            "b"
+          ],
+          "type": "text"
         },
         {
           "name": "year",
